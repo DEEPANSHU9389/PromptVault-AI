@@ -1,0 +1,6 @@
+{
+  "name": "PromptVault AI",
+  "description": "Modern AI Prompt Library & Prompt Management SaaS platform to discover, manage, customize, and test high-quality prompts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

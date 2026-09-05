@@ -1,0 +1,59 @@
+{
+  "entities": {
+    "users": {
+      "title": "Users",
+      "description": "User profiles and permissions",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "firstName": { "type": "string" },
+        "lastName": { "type": "string" },
+        "phone": { "type": "string" },
+        "background": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["user", "admin"] },
+        "createdAt": { "type": "string" },
+        "profileCompleted": { "type": "boolean" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "prompts": {
+      "title": "Prompts",
+      "description": "Library prompts for AI workflows",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "description": { "type": "string" },
+        "prompt": { "type": "string" },
+        "category": { "type": "string" },
+        "tags": { "type": "array", "items": { "type": "string" } },
+        "models": { "type": "array", "items": { "type": "string" } },
+        "difficulty": { "type": "string" },
+        "rating": { "type": "number" },
+        "ratingCount": { "type": "number" },
+        "usageCount": { "type": "number" },
+        "isPublic": { "type": "boolean" },
+        "isFeatured": { "type": "boolean" },
+        "authorId": { "type": "string" },
+        "author": { "type": "string" },
+        "variables": { "type": "array", "items": { "type": "string" } },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["title", "prompt", "category"]
+    },
+    "userLibraries": {
+      "title": "User Libraries",
+      "description": "Saved and favorite prompt IDs per user",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "savedPromptIds": { "type": "array", "items": { "type": "string" } },
+        "favoritePromptIds": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["uid"]
+    }
+  }
+}
