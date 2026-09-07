@@ -21,6 +21,11 @@ service cloud.firestore {
     match /users/{userId} {
       allow read: if isAuthenticated();
       allow write: if isOwner(userId) || isAdmin();
+
+      // Personal user prompts sub-collection (accessible by owner or admin)
+      match /myPrompts/{promptId} {
+        allow read, write: if isOwner(userId) || isAdmin();
+      }
     }
 
     // Prompts collection

@@ -1,20 +1,24 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
+import { GoogleGenAI } from '@google/genai';
+import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
+import { db } from '../firebase';
 import {
   Wand2,
-  Play,
   Copy,
   Check,
   Plus,
   Trash2,
   Sparkles,
-  Bot,
-  Layers,
   FileCode,
-  ArrowRight,
   BookmarkPlus,
   RefreshCw,
-  Info,
+  AlertTriangle,
+  Key,
+  ShieldCheck,
+  User,
+  Bot,
+  Layers,
 } from 'lucide-react';
 
 interface VariableItem {
@@ -41,9 +45,9 @@ const CONSTRAINT_PRESETS = [
 ];
 
 export const PromptBuilder: React.FC = () => {
-  const { createPrompt, addToast, setIsCreateModalOpen, currentUser } = useApp();
+  const { createPrompt, addToast, currentUser } = useApp();
 
-  // Block States
+  // Input Block States
   const [role, setRole] = useState('Senior Software Engineer');
   const [taskContext, setTaskContext] = useState(
     'Review the provided React component code for memory leaks, unnecessary re-renders, and performance bottlenecks.'
@@ -56,40 +60,15 @@ export const PromptBuilder: React.FC = () => {
     { id: 'v2', key: 'Framework', sampleValue: 'React 19 & TypeScript' },
   ]);
 
-  // Test Execution States
-  const [isTesting, setIsTesting] = useState(false);
-  const [isFastAssisting, setIsFastAssisting] = useState(false);
-  const [testOutput, setTestOutput] = useState<string | null>(null);
-  const [copiedAssembled, setCopiedAssembled] = useState(false);
-  const [copiedOutput, setCopiedOutput] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  // AI Prompt Generation States (No real-time concatenation)
+  const [assembledPrompt, setAssembledPrompt] = useState<string>('');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [apiKeyError, setApiKeyError] = useState<string | null>(null);
 
-  // Fast Tag Suggestion with gemini-3.1-flash-lite
-  const handleFastTagSuggest = async () => {
-    if (!taskContext.trim()) {
-      addToast('Please enter task context first.', 'error');
-      return;
-    }
-    setIsFastAssisting(true);
-    try {
-      const res = await fetch('/api/quick-assist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text: `${role}: ${taskContext}`, taskType: 'tag-suggest' }),
-      });
-      const data = await res.json();
-      if (data.tags && data.tags.length > 0) {
-        addToast(`Fast AI Tags (gemini-3.1-flash-lite): ${data.tags.join(', ')}`, 'success');
-      } else {
-        addToast('Fast assist completed.', 'info');
-      }
-    } catch (err) {
-      console.error(err);
-      addToast('Fast assist failed.', 'error');
-    } finally {
-      setIsFastAssisting(false);
-    }
-  };
+  // Interaction States
+  const [copiedAssembled, setCopiedAssembled] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [adminSaveTarget, setAdminSaveTarget] = useState<'personal' | 'public'>('personal');
 
   // Variable Handlers
   const addVariable = () => {
@@ -110,97 +89,191 @@ export const PromptBuilder: React.FC = () => {
     );
   };
 
-  // Compile prompt string
-  const compileRawPrompt = () => {
-    let p = `Act as a ${role || 'Expert AI Specialist'}.\n\n`;
-    if (taskContext.trim()) {
-      p += `[CONTEXT & TASK]\n${taskContext.trim()}\n\n`;
-    }
-    if (constraints.trim()) {
-      p += `[CONSTRAINTS & FORMAT]\n${constraints.trim()}\n\n`;
-    }
-    if (variables.length > 0) {
-      p += `[VARIABLES]\n`;
-      variables.forEach((v) => {
-        if (v.key.trim()) {
-          p += `- [${v.key.trim()}]: ${v.sampleValue || 'Variable input'}\n`;
-        }
-      });
-    }
-    return p.trim();
+  // Reset inputs
+  const handleResetInputs = () => {
+    setRole('Senior Software Engineer');
+    setTaskContext('');
+    setConstraints('');
+    setVariables([]);
+    setApiKeyError(null);
   };
 
-  const assembledPrompt = compileRawPrompt();
+  // =========================================================================
+  // 1 & 2. Gemini Setup & AI Enhancement Feature
+  // =========================================================================
+  const handleGenerateAiPrompt = async () => {
+    setApiKeyError(null);
 
-  // Copy Assembled Prompt
+    // 1. API Key Security: Strictly read from environment variable
+    const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
+
+    if (!geminiApiKey) {
+      const errorMsg = 'API Key is missing or invalid. Please configure VITE_GEMINI_API_KEY in your environment settings.';
+      setApiKeyError(errorMsg);
+      addToast('API Key is missing or invalid', 'error');
+      return;
+    }
+
+    if (!role.trim() && !taskContext.trim() && !constraints.trim()) {
+      addToast('Please fill in at least one input block before generating.', 'warning');
+      return;
+    }
+
+    // Build the Meta-Prompt Structure specified in requirements
+    const roleInput = role.trim() || 'General AI Specialist';
+    let taskInput = taskContext.trim() || 'No specific task details provided';
+
+    if (variables.length > 0) {
+      const formattedVars = variables
+        .filter((v) => v.key.trim())
+        .map((v) => `\n  - [${v.key.trim()}]: ${v.sampleValue.trim() || 'dynamic input'}`)
+        .join('');
+      if (formattedVars) {
+        taskInput += `\nDynamic Input Variables:${formattedVars}`;
+      }
+    }
+
+    const constraintsInput = constraints.trim() || 'Output in clear markdown with actionable steps';
+
+    const metaPrompt = `Act as an Expert Prompt Engineer. I will provide you with rough ideas for an AI prompt. Your job is to rewrite it into a highly professional, detailed, and optimized prompt ready to be used on LLMs like GPT-4 or Claude. Use best practices like clear markdown structure, defining the persona, step-by-step instructions, and formatting constraints. 
+Here are the raw inputs:
+- Role: ${roleInput}
+- Task: ${taskInput}
+- Constraints: ${constraintsInput}
+
+Return ONLY the final optimized prompt text without any intro or outro.`;
+
+    setIsGenerating(true);
+    setAssembledPrompt(''); // Clear previous output for real-time streaming display
+
+    try {
+      // Initialize Gemini Client strictly using the env variable
+      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
+
+      // Stream the response directly into the Assembled Prompt card
+      const responseStream = await ai.models.generateContentStream({
+        model: 'gemini-2.5-flash',
+        contents: metaPrompt,
+      });
+
+      let streamedText = '';
+      for await (const chunk of responseStream) {
+        if (chunk.text) {
+          streamedText += chunk.text;
+          setAssembledPrompt(streamedText);
+        }
+      }
+
+      // If streaming yielded no chunks, fall back to awaited generateContent
+      if (!streamedText.trim()) {
+        const fallbackResponse = await ai.models.generateContent({
+          model: 'gemini-2.5-flash',
+          contents: metaPrompt,
+        });
+        const fallbackText = fallbackResponse.text || '';
+        setAssembledPrompt(fallbackText);
+      }
+
+      addToast('✨ AI Prompt generated successfully!', 'success');
+    } catch (err: any) {
+      console.error('Gemini API Error:', err);
+      const rawMsg = err?.message || String(err);
+      
+      const isKeyProblem =
+        rawMsg.toLowerCase().includes('api key') ||
+        rawMsg.toLowerCase().includes('apikey') ||
+        rawMsg.toLowerCase().includes('403') ||
+        rawMsg.toLowerCase().includes('401') ||
+        rawMsg.toLowerCase().includes('unauthorized') ||
+        rawMsg.toLowerCase().includes('permission_denied');
+
+      const message = isKeyProblem
+        ? 'API Key is missing or invalid. Please verify your VITE_GEMINI_API_KEY.'
+        : `AI Generation error: ${rawMsg}`;
+
+      setApiKeyError(message);
+      addToast(message, 'error');
+    } finally {
+      setIsGenerating(false);
+    }
+  };
+
+  // =========================================================================
+  // 3. Copy Functionality
+  // =========================================================================
   const handleCopyAssembled = () => {
+    if (!assembledPrompt) {
+      addToast('No generated prompt to copy yet. Click "✨ Generate AI Prompt" first.', 'info');
+      return;
+    }
     navigator.clipboard.writeText(assembledPrompt);
     setCopiedAssembled(true);
-    addToast('Assembled prompt copied to clipboard!', 'success');
+    addToast('AI-generated prompt copied to clipboard!', 'success');
     setTimeout(() => setCopiedAssembled(false), 2000);
   };
 
-  // Copy Test Output
-  const handleCopyOutput = () => {
-    if (!testOutput) return;
-    navigator.clipboard.writeText(testOutput);
-    setCopiedOutput(true);
-    addToast('AI response output copied!', 'success');
-    setTimeout(() => setCopiedOutput(false), 2000);
-  };
-
-  // Run Test with Gemini API
-  const handleRunTest = async () => {
-    setIsTesting(true);
-    setTestOutput(null);
-
-    try {
-      const response = await fetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: assembledPrompt, model: 'gemini-3.6-flash' }),
-      });
-
-      const data = await response.json();
-      if (data.result) {
-        setTestOutput(data.result);
-        addToast('Gemini API test completed successfully!', 'success');
-      } else {
-        setTestOutput(data.error || 'Failed to generate output.');
-        addToast('API returned an error', 'error');
-      }
-    } catch (err: any) {
-      console.error('Test execution error:', err);
-      setTestOutput('Error running Gemini API test: ' + (err.message || String(err)));
-      addToast('Execution failed', 'error');
-    } finally {
-      setIsTesting(false);
-    }
-  };
-
-  // Save to My Prompts
+  // =========================================================================
+  // 4. Personal "Save to Library" Logic (Firestore backend save fix)
+  // =========================================================================
   const handleSaveToLibrary = async () => {
+    if (!currentUser?.uid) {
+      addToast('Please sign in to save prompts to your private library.', 'warning');
+      return;
+    }
+
+    if (!assembledPrompt.trim()) {
+      addToast('Please generate an AI prompt first before saving.', 'warning');
+      return;
+    }
+
     setIsSaving(true);
     try {
-      const tagList = ['Builder', role.split(' ')[0], 'Custom'];
-      await createPrompt({
-        title: `${role} Prompt Framework`,
-        description: `Custom assembled prompt for ${role.toLowerCase()} workflows.`,
-        prompt: assembledPrompt,
-        category: 'Coding',
-        tags: tagList,
-        models: ['ChatGPT', 'Claude', 'Gemini'],
-        difficulty: 'Intermediate',
-        author: currentUser?.displayName || 'Prompt Builder User',
-      });
-      addToast('Saved prompt to your Firestore library!', 'success');
-    } catch (err) {
-      console.error(err);
-      addToast('Failed to save prompt', 'error');
+      const isUserAdmin = currentUser.role === 'admin';
+
+      // For normal users: strictly save to their personal private sub-collection:
+      // Firebase Path: collection(db, 'users', currentUser.uid, 'myPrompts')
+      if (!isUserAdmin || adminSaveTarget === 'personal') {
+        const personalPromptsRef = collection(db, 'users', currentUser.uid, 'myPrompts');
+        await addDoc(personalPromptsRef, {
+          title: `${role.trim() || 'Custom'} AI Prompt`,
+          description: `AI-engineered prompt generated from: ${taskContext.slice(0, 90)}...`,
+          prompt: assembledPrompt.trim(),
+          role: role.trim(),
+          taskContext: taskContext.trim(),
+          constraints: constraints.trim(),
+          category: 'Personal',
+          tags: ['AI-Generated', 'Personal', role.split(' ')[0] || 'Custom'],
+          models: ['ChatGPT', 'Claude', 'Gemini'],
+          createdAt: serverTimestamp(),
+          authorId: currentUser.uid,
+          authorName: currentUser.displayName || currentUser.email || 'You',
+          isPersonal: true,
+        });
+
+        addToast('Saved prompt to your private library (myPrompts)!', 'success');
+      } else {
+        // Admin user choosing to publish globally
+        await createPrompt({
+          title: `${role.trim() || 'Custom'} AI Prompt`,
+          description: `Custom assembled prompt for ${role.toLowerCase()} workflows.`,
+          prompt: assembledPrompt.trim(),
+          category: 'Coding',
+          tags: ['AI-Generated', 'Admin', role.split(' ')[0] || 'Custom'],
+          models: ['ChatGPT', 'Claude', 'Gemini'],
+          difficulty: 'Intermediate',
+          author: currentUser?.displayName || 'Prompt Builder User',
+        });
+        addToast('Published prompt to global public library!', 'success');
+      }
+    } catch (err: any) {
+      console.error('Save to library error:', err);
+      addToast(`Failed to save prompt: ${err.message || 'Unknown error'}`, 'error');
     } finally {
       setIsSaving(false);
     }
   };
+
+  const hasEnvApiKey = Boolean((import.meta.env.VITE_GEMINI_API_KEY || '').trim());
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -211,31 +284,34 @@ export const PromptBuilder: React.FC = () => {
             <Wand2 className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-xl font-extrabold text-white">Interactive Step-by-Step Prompt Builder</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-extrabold text-white">AI-Powered Prompt Generator</h1>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
+                Gemini 2.5 Flash
+              </span>
+            </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Construct modular, variable-rich prompt blocks and test directly with Gemini API.
+              Transform rough instructions into production-ready, expert prompts and save directly to your personal library.
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={handleFastTagSuggest}
-            disabled={isFastAssisting}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-purple-950/40 hover:bg-purple-900/60 text-purple-300 border border-purple-500/30 transition-all"
-            title="Fast task with gemini-3.1-flash-lite"
+          {/* Environment API Key Status Indicator */}
+          <div
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-medium border ${
+              hasEnvApiKey
+                ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30'
+                : 'bg-amber-950/40 text-amber-300 border-amber-500/30'
+            }`}
+            title={hasEnvApiKey ? 'VITE_GEMINI_API_KEY detected' : 'VITE_GEMINI_API_KEY not found'}
           >
-            <Sparkles className="w-3.5 h-3.5 text-purple-400" />
-            <span>{isFastAssisting ? 'Extracting...' : 'Fast AI Tags (Flash-Lite)'}</span>
-          </button>
+            <Key className="w-3.5 h-3.5" />
+            <span>{hasEnvApiKey ? 'API Key Configured' : 'API Key Missing'}</span>
+          </div>
 
           <button
-            onClick={() => {
-              setRole('Senior Software Engineer');
-              setTaskContext('');
-              setConstraints('');
-              setVariables([]);
-            }}
+            onClick={handleResetInputs}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
           >
             <RefreshCw className="w-3.5 h-3.5" />
@@ -244,8 +320,12 @@ export const PromptBuilder: React.FC = () => {
 
           <button
             onClick={handleSaveToLibrary}
-            disabled={isSaving}
-            className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20 transition-all"
+            disabled={isSaving || !assembledPrompt.trim()}
+            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              assembledPrompt.trim()
+                ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20'
+                : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+            }`}
           >
             <BookmarkPlus className="w-4 h-4" />
             <span>{isSaving ? 'Saving...' : 'Save to Library'}</span>
@@ -253,15 +333,29 @@ export const PromptBuilder: React.FC = () => {
         </div>
       </div>
 
-      {/* Grid: Left Blocks (Builder) & Right Panel (Live Gemini Test) */}
+      {/* Global API Key Missing or Invalid Error Banner */}
+      {apiKeyError && (
+        <div className="p-4 rounded-2xl bg-red-950/40 border border-red-500/40 text-xs text-red-200 flex items-start gap-3 shadow-lg animate-fade-in">
+          <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <h4 className="font-bold text-red-300">API Key Error</h4>
+            <p className="leading-relaxed text-red-200/90">{apiKeyError}</p>
+            <p className="text-[11px] text-red-400/80">
+              Ensure you have set <code className="px-1.5 py-0.5 rounded bg-red-900/60 font-mono text-white">VITE_GEMINI_API_KEY</code> in your environment variables.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Grid: Left Blocks (Inputs & Generate Button) & Right Panel (Assembled AI Prompt) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Interactive Blocks */}
+        {/* Left Column: Interactive Input Blocks */}
         <div className="lg:col-span-7 space-y-5">
           {/* Block 1: Role / Persona */}
           <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-xl space-y-3">
             <div className="flex items-center gap-2 text-xs font-bold text-indigo-400 uppercase tracking-wider">
               <span className="w-5 h-5 rounded-md bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center text-[10px]">1</span>
-              <span>Role & Persona Block</span>
+              <span>Role & Persona</span>
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -275,7 +369,7 @@ export const PromptBuilder: React.FC = () => {
               />
             </div>
 
-            {/* Presets */}
+            {/* Role Presets */}
             <div className="space-y-1">
               <p className="text-[10px] text-slate-500 font-semibold uppercase">Presets:</p>
               <div className="flex flex-wrap gap-1.5">
@@ -300,16 +394,16 @@ export const PromptBuilder: React.FC = () => {
           <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-xl space-y-3">
             <div className="flex items-center gap-2 text-xs font-bold text-cyan-400 uppercase tracking-wider">
               <span className="w-5 h-5 rounded-md bg-cyan-500/20 border border-cyan-500/30 flex items-center justify-center text-[10px]">2</span>
-              <span>Task & Context Block</span>
+              <span>Task & Context</span>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-slate-300 font-medium">Core Instruction & Context</label>
+              <label className="text-xs text-slate-300 font-medium">Core Task / Objective</label>
               <textarea
                 rows={4}
                 value={taskContext}
                 onChange={(e) => setTaskContext(e.target.value)}
-                placeholder="Describe the background context, objective, or problem to solve..."
+                placeholder="Describe what you want the AI to do, context, goals, or code to inspect..."
                 className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 leading-relaxed"
               />
             </div>
@@ -319,21 +413,21 @@ export const PromptBuilder: React.FC = () => {
           <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-xl space-y-3">
             <div className="flex items-center gap-2 text-xs font-bold text-amber-400 uppercase tracking-wider">
               <span className="w-5 h-5 rounded-md bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-[10px]">3</span>
-              <span>Constraints & Output Format Block</span>
+              <span>Constraints & Rules</span>
             </div>
 
             <div className="flex flex-col gap-1.5">
-              <label className="text-xs text-slate-300 font-medium">Output Rules & Guardrails</label>
+              <label className="text-xs text-slate-300 font-medium">Guardrails & Output Format</label>
               <textarea
                 rows={3}
                 value={constraints}
                 onChange={(e) => setConstraints(e.target.value)}
-                placeholder="e.g. Tone, length limit, output schema, edge case handling..."
+                placeholder="e.g. Length limits, bullet points, tone, step-by-step reasoning..."
                 className="p-3.5 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-amber-500 leading-relaxed"
               />
             </div>
 
-            {/* Constraint Chips */}
+            {/* Constraint Preset Chips */}
             <div className="space-y-1">
               <p className="text-[10px] text-slate-500 font-semibold uppercase">Quick Add Rule:</p>
               <div className="flex flex-wrap gap-1.5">
@@ -355,12 +449,12 @@ export const PromptBuilder: React.FC = () => {
             </div>
           </div>
 
-          {/* Block 4: Dynamic Variable Placeholders */}
+          {/* Block 4: Optional Dynamic Variables */}
           <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-xl space-y-3">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2 text-xs font-bold text-purple-400 uppercase tracking-wider">
                 <span className="w-5 h-5 rounded-md bg-purple-500/20 border border-purple-500/30 flex items-center justify-center text-[10px]">4</span>
-                <span>Dynamic Variable Placeholders</span>
+                <span>Dynamic Variables (Optional)</span>
               </div>
               <button
                 onClick={addVariable}
@@ -371,14 +465,10 @@ export const PromptBuilder: React.FC = () => {
               </button>
             </div>
 
-            <p className="text-[11px] text-slate-400">
-              Variables created here are automatically compiled into square bracket placeholders like <code className="text-purple-300 bg-purple-500/10 px-1 py-0.5 rounded">[Variable_Name]</code>.
-            </p>
-
             <div className="space-y-2.5 pt-1">
               {variables.length === 0 ? (
                 <div className="p-3 border border-dashed border-slate-800 rounded-xl text-center text-xs text-slate-500">
-                  No custom variables added. Click "+ Add Variable" above.
+                  No dynamic variables defined. Click "+ Add Variable" to add inputs like [Code] or [Audience].
                 </div>
               ) : (
                 variables.map((v) => (
@@ -394,13 +484,13 @@ export const PromptBuilder: React.FC = () => {
                       />
                     </div>
                     <div className="flex-1">
-                      <label className="text-[10px] text-slate-500 font-semibold block">Sample Test Value</label>
+                      <label className="text-[10px] text-slate-500 font-semibold block">Sample Value</label>
                       <input
                         type="text"
                         value={v.sampleValue}
                         onChange={(e) => updateVariable(v.id, 'sampleValue', e.target.value)}
                         className="w-full px-2 py-1 bg-slate-900 border border-slate-800 rounded-lg text-xs text-slate-200 focus:outline-none focus:border-purple-500"
-                        placeholder="e.g. Sample input text..."
+                        placeholder="e.g. Sample value..."
                       />
                     </div>
                     <button
@@ -415,71 +505,169 @@ export const PromptBuilder: React.FC = () => {
               )}
             </div>
           </div>
-        </div>
 
-        {/* Right Column: Assembled Live Preview & Test with Gemini */}
-        <div className="lg:col-span-5 space-y-5">
-          {/* Assembled Compiled Prompt Card */}
-          <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/90 backdrop-blur-xl space-y-3 sticky top-20 shadow-xl">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <FileCode className="w-4 h-4 text-cyan-400" />
-                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Assembled Prompt</h3>
-              </div>
-              <button
-                onClick={handleCopyAssembled}
-                className="flex items-center gap-1 text-[11px] font-semibold text-cyan-400 hover:text-cyan-300"
-              >
-                {copiedAssembled ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copiedAssembled ? 'Copied' : 'Copy'}</span>
-              </button>
-            </div>
-
-            <pre className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 text-[11px] text-slate-300 font-mono whitespace-pre-wrap max-h-56 overflow-y-auto leading-relaxed border-l-2 border-l-cyan-500">
-              {assembledPrompt}
-            </pre>
-
-            {/* Run Gemini Test Button */}
+          {/* ========================================================================= */}
+          {/* Prominent "✨ Generate AI Prompt" Button Below Input Blocks */}
+          {/* ========================================================================= */}
+          <div className="pt-2">
             <button
-              onClick={handleRunTest}
-              disabled={isTesting}
-              className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-xs bg-gradient-to-r from-cyan-500 via-blue-600 to-indigo-600 hover:from-cyan-400 hover:to-indigo-500 text-white shadow-lg shadow-cyan-500/20 transition-all hover:scale-[1.01]"
+              onClick={handleGenerateAiPrompt}
+              disabled={isGenerating}
+              className={`w-full flex items-center justify-center gap-2.5 py-4 px-6 rounded-2xl font-bold text-sm text-white shadow-xl transition-all ${
+                isGenerating
+                  ? 'bg-slate-800 cursor-not-allowed text-slate-400 border border-slate-700'
+                  : 'bg-gradient-to-r from-indigo-600 via-purple-600 to-cyan-500 hover:from-indigo-500 hover:to-cyan-400 shadow-indigo-500/25 hover:shadow-indigo-500/40 hover:scale-[1.01] active:scale-[0.99]'
+              }`}
             >
-              {isTesting ? (
+              {isGenerating ? (
                 <>
-                  <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Running Test...</span>
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  <span>Synthesizing Expert Prompt with Gemini...</span>
                 </>
               ) : (
                 <>
-                  <Play className="w-4 h-4 fill-white" />
-                  <span>Run Test</span>
+                  <Sparkles className="w-5 h-5 text-cyan-300" />
+                  <span>✨ Generate AI Prompt</span>
                 </>
               )}
             </button>
+            <p className="text-center text-[11px] text-slate-500 mt-2">
+              Rewrites your rough inputs into a structured, professional prompt via Gemini API.
+            </p>
+          </div>
+        </div>
 
-            {/* Live Test Output Display */}
-            {testOutput && (
-              <div className="pt-3 border-t border-slate-800 space-y-2 animate-fade-in">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
-                    <Sparkles className="w-3.5 h-3.5" />
-                    <span>Gemini API Output</span>
-                  </div>
-                  <button
-                    onClick={handleCopyOutput}
-                    className="p-1 text-slate-400 hover:text-white"
-                    title="Copy AI output"
-                  >
-                    {copiedOutput ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
+        {/* Right Column: Assembled Prompt Output Card */}
+        <div className="lg:col-span-5 space-y-5">
+          <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/90 backdrop-blur-xl space-y-4 sticky top-20 shadow-xl">
+            {/* Header with Title & Copy Button */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <FileCode className="w-4 h-4 text-cyan-400" />
+                <h3 className="text-xs font-bold text-white uppercase tracking-wider">Assembled Prompt</h3>
+                {isGenerating && (
+                  <span className="flex items-center gap-1 text-[10px] text-cyan-400 font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 animate-pulse">
+                    Streaming...
+                  </span>
+                )}
+              </div>
+
+              {/* Top-Right Copy Button */}
+              <button
+                onClick={handleCopyAssembled}
+                disabled={!assembledPrompt}
+                className={`flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded-lg border transition-all ${
+                  assembledPrompt
+                    ? 'text-cyan-400 hover:text-cyan-300 border-cyan-500/30 hover:bg-cyan-500/10'
+                    : 'text-slate-600 border-transparent cursor-not-allowed'
+                }`}
+                title="Copy generated prompt to clipboard"
+              >
+                {copiedAssembled ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+
+            {/* Prompt Display Area */}
+            <div className="relative">
+              {assembledPrompt ? (
+                <div className="relative">
+                  <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800/90 text-xs text-slate-200 font-mono whitespace-pre-wrap min-h-[260px] max-h-[480px] overflow-y-auto leading-relaxed border-l-4 border-l-cyan-500 select-text">
+                    {assembledPrompt}
+                    {isGenerating && <span className="inline-block w-2 h-4 bg-cyan-400 animate-pulse ml-1 align-middle" />}
+                  </pre>
                 </div>
+              ) : (
+                <div className="p-8 rounded-xl bg-slate-950/60 border border-dashed border-slate-800 flex flex-col items-center justify-center text-center space-y-3 min-h-[260px]">
+                  <div className="p-3 rounded-full bg-slate-900 border border-slate-800 text-slate-500">
+                    <Sparkles className="w-6 h-6 text-indigo-400" />
+                  </div>
+                  <div className="max-w-[280px]">
+                    <h4 className="text-xs font-bold text-slate-300">Ready to Generate</h4>
+                    <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                      Configure your Role, Task, and Constraints on the left, then click{' '}
+                      <strong className="text-cyan-400">✨ Generate AI Prompt</strong> to craft an optimized prompt.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
 
-                <div className="p-3.5 rounded-xl bg-slate-950 border border-emerald-500/30 text-xs text-slate-200 leading-relaxed font-sans max-h-64 overflow-y-auto whitespace-pre-wrap">
-                  {testOutput}
+            {/* Admin Save Target Selector (Only shown if currentUser is admin) */}
+            {currentUser?.role === 'admin' && (
+              <div className="p-3 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+                <div className="flex items-center justify-between text-[11px] text-slate-400">
+                  <span className="font-semibold text-slate-300 flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                    Admin Save Destination:
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="saveTarget"
+                        value="personal"
+                        checked={adminSaveTarget === 'personal'}
+                        onChange={() => setAdminSaveTarget('personal')}
+                        className="text-indigo-600 focus:ring-0"
+                      />
+                      <span className="text-slate-300">Personal</span>
+                    </label>
+                    <label className="flex items-center gap-1 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="saveTarget"
+                        value="public"
+                        checked={adminSaveTarget === 'public'}
+                        onChange={() => setAdminSaveTarget('public')}
+                        className="text-indigo-600 focus:ring-0"
+                      />
+                      <span className="text-amber-400 font-semibold">Public</span>
+                    </label>
+                  </div>
                 </div>
               </div>
             )}
+
+            {/* Bottom Actions inside Assembled Card */}
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={handleSaveToLibrary}
+                disabled={isSaving || !assembledPrompt.trim()}
+                className={`w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-xs transition-all ${
+                  assembledPrompt.trim()
+                    ? 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20 active:scale-[0.99]'
+                    : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                }`}
+              >
+                <BookmarkPlus className="w-4 h-4" />
+                <span>
+                  {isSaving
+                    ? 'Saving to Personal Library...'
+                    : currentUser?.role === 'admin' && adminSaveTarget === 'public'
+                    ? 'Publish to Public Library'
+                    : 'Save to My Prompts'}
+                </span>
+              </button>
+            </div>
+
+            <div className="text-[11px] text-slate-500 flex items-center gap-1.5 justify-center">
+              <User className="w-3.5 h-3.5 text-slate-400" />
+              <span>
+                {currentUser?.role === 'admin' && adminSaveTarget === 'public'
+                  ? 'Saving to global prompts collection'
+                  : 'Saves privately to collection: users/{uid}/myPrompts'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
