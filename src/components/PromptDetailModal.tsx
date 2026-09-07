@@ -113,17 +113,12 @@ export const PromptDetailModal: React.FC<PromptDetailModalProps> = ({
         const data = await response.json();
         setAiOutput(data.result || data.text || 'Generated response complete.');
       } else {
-        // Fallback realistic simulation if endpoint unavailable
-        await new Promise((res) => setTimeout(res, 1200));
-        setAiOutput(
-          `[Generated AI Output Preview]\n\nBased on your prompt parameters, here is the generated sample response:\n\n1. Hook: Are you still creating prompts manually? Here is the blueprint that scaled our workflow by 10x.\n2. Insight: Structure beats raw text every time.\n3. Key Takeaway: Use structured variables to standardize quality across teams.`
-        );
+        const data = await response.json().catch(() => null);
+        const errMsg = data?.details || data?.error || 'AI generation request failed.';
+        setAiOutput(`[AI Generation Error]\n\n${errMsg}`);
       }
-    } catch {
-      await new Promise((res) => setTimeout(res, 1200));
-      setAiOutput(
-        `[Generated AI Output Preview]\n\nBased on your prompt parameters, here is the generated sample response:\n\n1. Hook: Are you still creating prompts manually? Here is the blueprint that scaled our workflow by 10x.\n2. Insight: Structure beats raw text every time.\n3. Key Takeaway: Use structured variables to standardize quality across teams.`
-      );
+    } catch (err: any) {
+      setAiOutput(`[AI Request Failed]\n\n${err?.message || 'Could not reach backend AI service.'}`);
     } finally {
       setIsAiRunning(false);
     }

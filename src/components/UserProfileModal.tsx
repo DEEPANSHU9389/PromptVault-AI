@@ -92,6 +92,7 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
     }
 
     setIsSavingName(true);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       const nameParts = trimmed.split(' ');
       const firstName = nameParts[0] || '';
@@ -105,9 +106,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
       });
 
       // 2. Strict 3000ms Promise.race timeout wrapper on remote Firebase calls
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Update timed out. Changes saved locally.')), 3000)
-      );
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutId = setTimeout(() => reject(new Error('Update timed out. Changes saved locally.')), 3000);
+      });
 
       try {
         await Promise.race([
@@ -124,6 +125,9 @@ export const UserProfileModal: React.FC<UserProfileModalProps> = ({ isOpen, onCl
       console.error('Failed to update display name:', err);
       addToast('Update Failed', 'error', err?.message || 'Could not update display name. Please try again.');
     } finally {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
       // ALWAYS reset loading spinner state so it never hangs
       setIsSavingName(false);
     }

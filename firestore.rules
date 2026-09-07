@@ -31,7 +31,7 @@ service cloud.firestore {
     // Prompts collection
     match /prompts/{promptId} {
       allow read: if true;
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() && request.resource.data.authorId == request.auth.uid;
       allow update, delete: if isAuthenticated() && (resource.data.authorId == request.auth.uid || isAdmin());
     }
 

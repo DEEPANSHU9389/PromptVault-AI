@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { GoogleGenAI } from '@google/genai';
 import { collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import {
@@ -17,8 +16,7 @@ import {
   Key,
   ShieldCheck,
   User,
-  Bot,
-  Layers,
+  Tag,
 } from 'lucide-react';
 
 interface VariableItem {
@@ -44,6 +42,17 @@ const CONSTRAINT_PRESETS = [
   'Highlight potential edge cases and safety considerations',
 ];
 
+const CATEGORY_OPTIONS = [
+  'Coding',
+  'Marketing',
+  'Writing',
+  'Business',
+  'Creative',
+  'Productivity',
+  'Education',
+  'Personal',
+];
+
 export const PromptBuilder: React.FC = () => {
   const { createPrompt, addToast, currentUser } = useApp();
 
@@ -55,12 +64,13 @@ export const PromptBuilder: React.FC = () => {
   const [constraints, setConstraints] = useState(
     'Output as bullet points with code snippets. Provide step-by-step reasoning.'
   );
+  const [category, setCategory] = useState('Coding');
   const [variables, setVariables] = useState<VariableItem[]>([
     { id: 'v1', key: 'Code', sampleValue: 'useEffect(() => { const timer = setInterval(fetchData, 1000); }, []);' },
     { id: 'v2', key: 'Framework', sampleValue: 'React 19 & TypeScript' },
   ]);
 
-  // AI Prompt Generation States (No real-time concatenation)
+  // AI Prompt Generation States (Backend API driven)
   const [assembledPrompt, setAssembledPrompt] = useState<string>('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
@@ -94,32 +104,23 @@ export const PromptBuilder: React.FC = () => {
     setRole('Senior Software Engineer');
     setTaskContext('');
     setConstraints('');
+    setCategory('Coding');
     setVariables([]);
     setApiKeyError(null);
   };
 
   // =========================================================================
-  // 1 & 2. Gemini Setup & AI Enhancement Feature
+  // 1 & 2. Backend-Powered Gemini Generation Logic (/api/generate)
   // =========================================================================
   const handleGenerateAiPrompt = async () => {
     setApiKeyError(null);
-
-    // 1. API Key Security: Strictly read from environment variable
-    const geminiApiKey = (import.meta.env.VITE_GEMINI_API_KEY || '').trim();
-
-    if (!geminiApiKey) {
-      const errorMsg = 'API Key is missing or invalid. Please configure VITE_GEMINI_API_KEY in your environment settings.';
-      setApiKeyError(errorMsg);
-      addToast('API Key is missing or invalid', 'error');
-      return;
-    }
 
     if (!role.trim() && !taskContext.trim() && !constraints.trim()) {
       addToast('Please fill in at least one input block before generating.', 'warning');
       return;
     }
 
-    // Build the Meta-Prompt Structure specified in requirements
+    // Build the Meta-Prompt Structure
     const roleInput = role.trim() || 'General AI Specialist';
     let taskInput = taskContext.trim() || 'No specific task details provided';
 
@@ -144,53 +145,56 @@ Here are the raw inputs:
 Return ONLY the final optimized prompt text without any intro or outro.`;
 
     setIsGenerating(true);
-    setAssembledPrompt(''); // Clear previous output for real-time streaming display
+    setAssembledPrompt('');
 
     try {
-      // Initialize Gemini Client strictly using the env variable
-      const ai = new GoogleGenAI({ apiKey: geminiApiKey });
-
-      // Stream the response directly into the Assembled Prompt card
-      const responseStream = await ai.models.generateContentStream({
-        model: 'gemini-2.5-flash',
-        contents: metaPrompt,
+      // Secure backend call to /api/generate (no client-side API keys exposed)
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: metaPrompt,
+          model: 'gemini-2.5-flash',
+        }),
       });
 
-      let streamedText = '';
-      for await (const chunk of responseStream) {
-        if (chunk.text) {
-          streamedText += chunk.text;
-          setAssembledPrompt(streamedText);
-        }
+      let data: any = null;
+      try {
+        const rawText = await response.text();
+        data = JSON.parse(rawText);
+      } catch (parseErr) {
+        console.warn('Failed to parse response JSON from /api/generate:', parseErr);
+        data = { error: 'Invalid response format from server' };
       }
 
-      // If streaming yielded no chunks, fall back to awaited generateContent
-      if (!streamedText.trim()) {
-        const fallbackResponse = await ai.models.generateContent({
-          model: 'gemini-2.5-flash',
-          contents: metaPrompt,
-        });
-        const fallbackText = fallbackResponse.text || '';
-        setAssembledPrompt(fallbackText);
+      if (!response.ok || data?.error) {
+        const rawMsg = data?.details || data?.error || 'Failed to generate AI prompt.';
+        const isKeyProblem =
+          rawMsg.toLowerCase().includes('api key') ||
+          rawMsg.toLowerCase().includes('apikey') ||
+          rawMsg.toLowerCase().includes('403') ||
+          rawMsg.toLowerCase().includes('401') ||
+          rawMsg.toLowerCase().includes('unauthorized') ||
+          rawMsg.toLowerCase().includes('permission_denied');
+
+        const displayMessage = isKeyProblem
+          ? 'API Key is missing or invalid. Please configure GEMINI_API_KEY on the server.'
+          : `Generation failed: ${rawMsg}`;
+
+        setApiKeyError(displayMessage);
+        addToast(displayMessage, 'error');
+        return;
       }
 
-      addToast('✨ AI Prompt generated successfully!', 'success');
+      if (data?.result) {
+        setAssembledPrompt(data.result);
+        addToast('✨ AI Prompt generated successfully!', 'success');
+      } else {
+        throw new Error('No output returned from AI model.');
+      }
     } catch (err: any) {
-      console.error('Gemini API Error:', err);
-      const rawMsg = err?.message || String(err);
-      
-      const isKeyProblem =
-        rawMsg.toLowerCase().includes('api key') ||
-        rawMsg.toLowerCase().includes('apikey') ||
-        rawMsg.toLowerCase().includes('403') ||
-        rawMsg.toLowerCase().includes('401') ||
-        rawMsg.toLowerCase().includes('unauthorized') ||
-        rawMsg.toLowerCase().includes('permission_denied');
-
-      const message = isKeyProblem
-        ? 'API Key is missing or invalid. Please verify your VITE_GEMINI_API_KEY.'
-        : `AI Generation error: ${rawMsg}`;
-
+      console.error('Generation call error:', err);
+      const message = err?.message || 'Failed to connect to backend AI service.';
       setApiKeyError(message);
       addToast(message, 'error');
     } finally {
@@ -213,10 +217,11 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
   };
 
   // =========================================================================
-  // 4. Personal "Save to Library" Logic (Firestore backend save fix)
+  // 4. Private Saving & Dynamic Categories (Firestore Backend Fix)
   // =========================================================================
   const handleSaveToLibrary = async () => {
-    if (!currentUser?.uid) {
+    // Strict verification that currentUser and currentUser.uid exist
+    if (!currentUser || !currentUser.uid) {
       addToast('Please sign in to save prompts to your private library.', 'warning');
       return;
     }
@@ -241,8 +246,8 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
           role: role.trim(),
           taskContext: taskContext.trim(),
           constraints: constraints.trim(),
-          category: 'Personal',
-          tags: ['AI-Generated', 'Personal', role.split(' ')[0] || 'Custom'],
+          category: category, // Uses dynamic category variable
+          tags: ['AI-Generated', 'Personal', category],
           models: ['ChatGPT', 'Claude', 'Gemini'],
           createdAt: serverTimestamp(),
           authorId: currentUser.uid,
@@ -252,18 +257,18 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
 
         addToast('Saved prompt to your private library (myPrompts)!', 'success');
       } else {
-        // Admin user choosing to publish globally
+        // Admin user choosing to publish globally using the dynamic category
         await createPrompt({
           title: `${role.trim() || 'Custom'} AI Prompt`,
           description: `Custom assembled prompt for ${role.toLowerCase()} workflows.`,
           prompt: assembledPrompt.trim(),
-          category: 'Coding',
-          tags: ['AI-Generated', 'Admin', role.split(' ')[0] || 'Custom'],
+          category: category, // Uses dynamic category variable instead of hardcoding 'Coding'
+          tags: ['AI-Generated', 'Admin', category],
           models: ['ChatGPT', 'Claude', 'Gemini'],
           difficulty: 'Intermediate',
           author: currentUser?.displayName || 'Prompt Builder User',
         });
-        addToast('Published prompt to global public library!', 'success');
+        addToast(`Published prompt to global public library under '${category}'!`, 'success');
       }
     } catch (err: any) {
       console.error('Save to library error:', err);
@@ -272,8 +277,6 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
       setIsSaving(false);
     }
   };
-
-  const hasEnvApiKey = Boolean((import.meta.env.VITE_GEMINI_API_KEY || '').trim());
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -287,29 +290,16 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-extrabold text-white">AI-Powered Prompt Generator</h1>
               <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-cyan-500/10 text-cyan-300 border border-cyan-500/20">
-                Gemini 2.5 Flash
+                Server-Side Gemini
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
-              Transform rough instructions into production-ready, expert prompts and save directly to your personal library.
+              Transform rough instructions into production-ready, expert prompts and save securely to your personal library.
             </p>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {/* Environment API Key Status Indicator */}
-          <div
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-medium border ${
-              hasEnvApiKey
-                ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/30'
-                : 'bg-amber-950/40 text-amber-300 border-amber-500/30'
-            }`}
-            title={hasEnvApiKey ? 'VITE_GEMINI_API_KEY detected' : 'VITE_GEMINI_API_KEY not found'}
-          >
-            <Key className="w-3.5 h-3.5" />
-            <span>{hasEnvApiKey ? 'API Key Configured' : 'API Key Missing'}</span>
-          </div>
-
           <button
             onClick={handleResetInputs}
             className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors"
@@ -338,11 +328,8 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
         <div className="p-4 rounded-2xl bg-red-950/40 border border-red-500/40 text-xs text-red-200 flex items-start gap-3 shadow-lg animate-fade-in">
           <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
           <div className="space-y-1">
-            <h4 className="font-bold text-red-300">API Key Error</h4>
+            <h4 className="font-bold text-red-300">API Key Configuration Notice</h4>
             <p className="leading-relaxed text-red-200/90">{apiKeyError}</p>
-            <p className="text-[11px] text-red-400/80">
-              Ensure you have set <code className="px-1.5 py-0.5 rounded bg-red-900/60 font-mono text-white">VITE_GEMINI_API_KEY</code> in your environment variables.
-            </p>
           </div>
         </div>
       )}
@@ -351,6 +338,29 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* Left Column: Interactive Input Blocks */}
         <div className="lg:col-span-7 space-y-5">
+          {/* Category Selector Block */}
+          <div className="p-4 rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
+              <Tag className="w-4 h-4 text-cyan-400" />
+              <span>Prompt Category:</span>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {CATEGORY_OPTIONS.map((cat) => (
+                <button
+                  key={cat}
+                  onClick={() => setCategory(cat)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-all ${
+                    category === cat
+                      ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/40 shadow-sm'
+                      : 'bg-slate-950 text-slate-400 border-slate-800 hover:text-slate-200'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Block 1: Role / Persona */}
           <div className="p-5 rounded-2xl border border-slate-800 bg-slate-900/60 backdrop-blur-xl space-y-3">
             <div className="flex items-center gap-2 text-xs font-bold text-indigo-400 uppercase tracking-wider">
@@ -506,9 +516,7 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
             </div>
           </div>
 
-          {/* ========================================================================= */}
-          {/* Prominent "✨ Generate AI Prompt" Button Below Input Blocks */}
-          {/* ========================================================================= */}
+          {/* Prominent "✨ Generate AI Prompt" Button */}
           <div className="pt-2">
             <button
               onClick={handleGenerateAiPrompt}
@@ -522,7 +530,7 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
               {isGenerating ? (
                 <>
                   <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Synthesizing Expert Prompt with Gemini...</span>
+                  <span>Synthesizing Expert Prompt with Server-Side Gemini...</span>
                 </>
               ) : (
                 <>
@@ -532,7 +540,7 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
               )}
             </button>
             <p className="text-center text-[11px] text-slate-500 mt-2">
-              Rewrites your rough inputs into a structured, professional prompt via Gemini API.
+              Rewrites your rough inputs into a structured, professional prompt via server-side Gemini endpoint.
             </p>
           </div>
         </div>
@@ -547,7 +555,7 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
                 <h3 className="text-xs font-bold text-white uppercase tracking-wider">Assembled Prompt</h3>
                 {isGenerating && (
                   <span className="flex items-center gap-1 text-[10px] text-cyan-400 font-semibold px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/30 animate-pulse">
-                    Streaming...
+                    Generating...
                   </span>
                 )}
               </div>
@@ -583,7 +591,6 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
                 <div className="relative">
                   <pre className="p-4 rounded-xl bg-slate-950 border border-slate-800/90 text-xs text-slate-200 font-mono whitespace-pre-wrap min-h-[260px] max-h-[480px] overflow-y-auto leading-relaxed border-l-4 border-l-cyan-500 select-text">
                     {assembledPrompt}
-                    {isGenerating && <span className="inline-block w-2 h-4 bg-cyan-400 animate-pulse ml-1 align-middle" />}
                   </pre>
                 </div>
               ) : (
@@ -652,9 +659,9 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
                 <BookmarkPlus className="w-4 h-4" />
                 <span>
                   {isSaving
-                    ? 'Saving to Personal Library...'
+                    ? 'Saving...'
                     : currentUser?.role === 'admin' && adminSaveTarget === 'public'
-                    ? 'Publish to Public Library'
+                    ? `Publish to Public (${category})`
                     : 'Save to My Prompts'}
                 </span>
               </button>
@@ -664,7 +671,7 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
               <User className="w-3.5 h-3.5 text-slate-400" />
               <span>
                 {currentUser?.role === 'admin' && adminSaveTarget === 'public'
-                  ? 'Saving to global prompts collection'
+                  ? `Saving to global prompts with category: "${category}"`
                   : 'Saves privately to collection: users/{uid}/myPrompts'}
               </span>
             </div>
