@@ -21,7 +21,9 @@ import {
   Cpu,
   Plus,
   Layers,
-  Sparkle
+  Sparkle,
+  Lock,
+  Shield
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PromptItem, CategoryType, DifficultyType } from '../../types';
@@ -79,6 +81,7 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
   onSaved
 }) => {
   const { currentUser, allPrompts, createPrompt, updatePrompt, addToast } = useApp();
+  const isAdmin = currentUser?.role === 'admin';
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -104,9 +107,17 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
   ).sort();
 
   const [tags, setTags] = useState<string>('SaaS, Copywriting, Growth');
-  const [status, setStatus] = useState<'published' | 'draft' | 'scheduled'>('published');
+  const [status, setStatus] = useState<'published' | 'draft' | 'scheduled'>(isAdmin ? 'published' : 'draft');
   const [scheduledAt, setScheduledAt] = useState<string>('');
   const [isFeatured, setIsFeatured] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!isAdmin && status !== 'draft') {
+      setStatus('draft');
+      setIsFeatured(false);
+      setScheduledAt('');
+    }
+  }, [isAdmin, status]);
   const [imageUrl, setImageUrl] = useState<string>('');
   const [isUploadingImage, setIsUploadingImage] = useState<boolean>(false);
   const [uploadProgress, setUploadProgress] = useState<number>(0);
@@ -322,15 +333,16 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
         compatibleModels: finalModels,
         modelVersions: finalModels,
         tags: safeTags,
-        status,
-        isPublic: status === 'published',
-        isFeatured: Boolean(isFeatured),
-        author: currentUser?.displayName || 'Admin Creator Studio',
-        authorId: currentUser?.uid || 'admin',
+        status: isAdmin ? status : 'draft',
+        isPublic: isAdmin && status === 'published',
+        isFeatured: isAdmin && Boolean(isFeatured),
+        isPersonal: !isAdmin,
+        author: currentUser?.displayName || (isAdmin ? 'Admin Creator Studio' : 'You (Custom)'),
+        authorId: currentUser?.uid || (isAdmin ? 'admin' : 'user-local'),
         imageUrl: imageUrl.trim() || undefined,
       };
 
-      if (status === 'scheduled' && scheduledAt) {
+      if (isAdmin && status === 'scheduled' && scheduledAt) {
         payload.scheduledAt = scheduledAt;
       }
       if (currentUser?.email) {
@@ -340,7 +352,9 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
       if (editingDraftId) {
         await updatePrompt(editingDraftId, payload);
         addToast(
-          status === 'published'
+          !isAdmin
+            ? 'Saved to My Prompts (Private)!'
+            : status === 'published'
             ? 'Prompt Published Successfully!'
             : status === 'scheduled'
             ? 'Scheduled Release Updated!'
@@ -351,7 +365,9 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
       } else {
         await createPrompt(payload);
         addToast(
-          status === 'published'
+          !isAdmin
+            ? 'Saved to My Prompts (Private)!'
+            : status === 'published'
             ? 'Prompt Published Successfully!'
             : status === 'scheduled'
             ? `Scheduled for Release on ${new Date(scheduledAt).toLocaleString()}`
@@ -732,85 +748,122 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
 
           {/* Status Options */}
           <div className="pt-2 border-t border-slate-800 space-y-3">
-            <label className="block text-xs font-bold text-white uppercase tracking-wider">
-              Publishing Workflow Status
-            </label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <button
-                type="button"
-                onClick={() => setStatus('published')}
-                className={`p-3 rounded-xl border text-left transition-all ${
-                  status === 'published'
-                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
-                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <div className="flex items-center space-x-2 font-bold text-xs">
-                  <Globe className="w-4 h-4 text-emerald-400" />
-                  <span>Publish Now</span>
-                </div>
-                <div className="text-[10px] opacity-75 mt-0.5">Live in public library</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStatus('draft')}
-                className={`p-3 rounded-xl border text-left transition-all ${
-                  status === 'draft'
-                    ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
-                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <div className="flex items-center space-x-2 font-bold text-xs">
-                  <Edit className="w-4 h-4 text-amber-400" />
-                  <span>Save as Draft</span>
-                </div>
-                <div className="text-[10px] opacity-75 mt-0.5">Private admin drafts</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setStatus('scheduled')}
-                className={`p-3 rounded-xl border text-left transition-all ${
-                  status === 'scheduled'
-                    ? 'bg-blue-500/15 border-blue-500/40 text-blue-300'
-                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <div className="flex items-center space-x-2 font-bold text-xs">
-                  <Calendar className="w-4 h-4 text-blue-400" />
-                  <span>Schedule Post</span>
-                </div>
-                <div className="text-[10px] opacity-75 mt-0.5">Automated date release</div>
-              </button>
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-bold text-white uppercase tracking-wider">
+                {isAdmin ? 'Publishing Workflow Status' : 'Personal Workspace Status'}
+              </label>
+              {!isAdmin && (
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 flex items-center gap-1">
+                  <Lock className="w-3 h-3 text-cyan-400" />
+                  <span>Private Vault Only</span>
+                </span>
+              )}
             </div>
 
-            {status === 'scheduled' && (
-              <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl space-y-1">
-                <label className="block text-xs font-semibold text-blue-300">
-                  Target Release Date & Time
-                </label>
-                <input
-                  type="datetime-local"
-                  value={scheduledAt}
-                  onChange={(e) => setScheduledAt(e.target.value)}
-                  className="w-full p-2 bg-slate-950 border border-slate-800 text-white rounded-lg text-xs focus:outline-none"
-                />
+            {!isAdmin ? (
+              /* Non-Admin RBAC Notice & Locked Personal Status */
+              <div className="space-y-3">
+                <div className="p-3.5 bg-cyan-950/30 border border-cyan-500/30 rounded-xl flex items-start space-x-2.5">
+                  <Lock className="w-4 h-4 text-cyan-400 mt-0.5 shrink-0" />
+                  <div className="space-y-1">
+                    <div className="text-xs font-semibold text-cyan-200">
+                      Global Library Isolation Enforced
+                    </div>
+                    <p className="text-[11px] text-slate-400 leading-relaxed">
+                      Global public publishing, scheduling, and featuring are restricted to Administrators. Your prompt will be saved strictly to your private workspace (<code className="text-cyan-300 font-mono text-[10px]">users/{currentUser?.uid || 'uid'}/myPrompts</code>).
+                    </p>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl border bg-cyan-500/10 border-cyan-500/40 text-cyan-300">
+                  <div className="flex items-center space-x-2 font-bold text-xs">
+                    <Edit className="w-4 h-4 text-cyan-400" />
+                    <span>Personal Private Prompt</span>
+                  </div>
+                  <div className="text-[10px] opacity-75 mt-0.5">Strictly saved to personal vault</div>
+                </div>
               </div>
+            ) : (
+              /* Admin Publishing Workflow */
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setStatus('published')}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      status === 'published'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2 font-bold text-xs">
+                      <Globe className="w-4 h-4 text-emerald-400" />
+                      <span>Publish Now</span>
+                    </div>
+                    <div className="text-[10px] opacity-75 mt-0.5">Live in public library</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStatus('draft')}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      status === 'draft'
+                        ? 'bg-amber-500/15 border-amber-500/40 text-amber-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2 font-bold text-xs">
+                      <Edit className="w-4 h-4 text-amber-400" />
+                      <span>Save as Draft</span>
+                    </div>
+                    <div className="text-[10px] opacity-75 mt-0.5">Private admin drafts</div>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setStatus('scheduled')}
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      status === 'scheduled'
+                        ? 'bg-blue-500/15 border-blue-500/40 text-blue-300'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    <div className="flex items-center space-x-2 font-bold text-xs">
+                      <Calendar className="w-4 h-4 text-blue-400" />
+                      <span>Schedule Post</span>
+                    </div>
+                    <div className="text-[10px] opacity-75 mt-0.5">Automated date release</div>
+                  </button>
+                </div>
+
+                {status === 'scheduled' && (
+                  <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-xl space-y-1">
+                    <label className="block text-xs font-semibold text-blue-300">
+                      Target Release Date & Time
+                    </label>
+                    <input
+                      type="datetime-local"
+                      value={scheduledAt}
+                      onChange={(e) => setScheduledAt(e.target.value)}
+                      className="w-full p-2 bg-slate-950 border border-slate-800 text-white rounded-lg text-xs focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                <div className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
+                  <div>
+                    <div className="text-xs font-semibold text-slate-200">Featured Prompt</div>
+                    <div className="text-[11px] text-slate-400">Pin to top of Library carousel</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={isFeatured}
+                    onChange={(e) => setIsFeatured(e.target.checked)}
+                    className="w-4 h-4 accent-purple-600 rounded cursor-pointer"
+                  />
+                </div>
+              </>
             )}
-
-            <div className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800">
-              <div>
-                <div className="text-xs font-semibold text-slate-200">Featured Prompt</div>
-                <div className="text-[11px] text-slate-400">Pin to top of Library carousel</div>
-              </div>
-              <input
-                type="checkbox"
-                checked={isFeatured}
-                onChange={(e) => setIsFeatured(e.target.checked)}
-                className="w-4 h-4 accent-purple-600 rounded cursor-pointer"
-              />
-            </div>
           </div>
 
           <div className="pt-3 flex items-center justify-end space-x-3">
@@ -834,7 +887,9 @@ export const CreatorStudio: React.FC<CreatorStudioProps> = ({
                 <>
                   <Send className="w-4 h-4" />
                   <span>
-                    {status === 'published'
+                    {!isAdmin
+                      ? 'Save to My Prompts (Private)'
+                      : status === 'published'
                       ? 'Publish Prompt Live'
                       : status === 'scheduled'
                       ? 'Schedule Release'

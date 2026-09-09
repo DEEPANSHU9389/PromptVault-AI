@@ -143,11 +143,21 @@ export const Topbar: React.FC = () => {
 
         {/* Create Prompt Action */}
         <button
-          onClick={() => setIsCreateModalOpen(true)}
-          className="hidden lg:flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20 transition-all hover:scale-[1.02]"
+          onClick={() => {
+            if (currentUser?.role === 'admin') {
+              setViewMode('admin');
+            } else {
+              setIsCreateModalOpen(true);
+            }
+          }}
+          className={`hidden lg:flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold shadow-md transition-all hover:scale-[1.02] ${
+            currentUser?.role === 'admin'
+              ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20'
+              : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/20'
+          }`}
         >
           <Plus className="w-3.5 h-3.5 stroke-[3]" />
-          <span>+ Create Prompt</span>
+          <span>{currentUser?.role === 'admin' ? '+ Publish Studio' : '+ Create Prompt'}</span>
         </button>
 
         {/* User Auth / Profile Menu */}

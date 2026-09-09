@@ -34,6 +34,16 @@ export const Sidebar: React.FC = () => {
     setIsCreateModalOpen,
   } = useApp();
 
+  const isAdmin = currentUser?.role === 'admin';
+
+  const handleCreatePromptClick = () => {
+    if (isAdmin) {
+      setViewMode('admin');
+    } else {
+      setIsCreateModalOpen(true);
+    }
+  };
+
   const navItems = [
     { id: 'dashboard' as ViewMode, label: 'Dashboard', icon: LayoutDashboard },
     { id: 'library' as ViewMode, label: 'Prompt Library', icon: Library },
@@ -107,19 +117,27 @@ export const Sidebar: React.FC = () => {
           {(!isSidebarCollapsed || isMobileSidebarOpen) ? (
             <div className="p-3">
               <button
-                onClick={() => setIsCreateModalOpen(true)}
-                className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 shadow-md shadow-cyan-500/20 transition-all hover:scale-[1.02]"
+                onClick={handleCreatePromptClick}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl text-xs font-bold shadow-md transition-all hover:scale-[1.02] ${
+                  isAdmin
+                    ? 'bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white shadow-purple-600/20'
+                    : 'bg-gradient-to-r from-cyan-500 to-blue-600 hover:from-cyan-400 hover:to-blue-500 text-slate-950 shadow-cyan-500/20'
+                }`}
               >
                 <Sparkles className="w-4 h-4" />
-                <span>+ Create Prompt</span>
+                <span>{isAdmin ? '+ Publish Studio' : '+ Create Prompt'}</span>
               </button>
             </div>
           ) : (
             <div className="p-3 flex justify-center">
               <button
-                onClick={() => setIsCreateModalOpen(true)}
-                title="Create Prompt"
-                className="p-2.5 rounded-xl bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-md shadow-cyan-500/20 transition-all"
+                onClick={handleCreatePromptClick}
+                title={isAdmin ? 'Admin Publishing Studio' : 'Create Personal Prompt'}
+                className={`p-2.5 rounded-xl shadow-md transition-all ${
+                  isAdmin
+                    ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20'
+                    : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/20'
+                }`}
               >
                 <Sparkles className="w-4 h-4" />
               </button>

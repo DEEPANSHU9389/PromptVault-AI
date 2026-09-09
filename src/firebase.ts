@@ -982,3 +982,142 @@ export const bulkImportPromptsToFirestore = async (prompts: Omit<PromptItem, 'id
     throw error;
   }
 };
+
+/**
+ * Personal Prompts Sub-Collection (`users/{userId}/myPrompts/{promptId}`)
+ * Strictly accessible by the owning user for private prompt generation and storage.
+ */
+export const addUserPromptToFirestore = async (
+  uid: string,
+  promptData: Omit<PromptItem, 'id'> & { id?: string },
+  timeoutMs: number = 4000
+): Promise<string> => {
+  const fallbackId =
+    promptData.id ||
+    (typeof crypto !== 'undefined' && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `user-prompt-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+
+  if (!isConfigured || !db || !uid) {
+    return fallbackId;
+  }
+
+  const cleanData = removeUndefinedProps({
+    ...promptData,
+    id: fallbackId,
+    title: (promptData.title || '').slice(0, 200),
+    description: (promptData.description || '').slice(0, 1000),
+    prompt: (promptData.prompt || '').slice(0, 10000),
+    category: (promptData.category || 'General').trim().slice(0, 100),
+    difficulty: promptData.difficulty || 'Intermediate',
+    models: promptData.models && promptData.models.length > 0 ? promptData.models : ['ChatGPT'],
+    compatibleApps: Array.isArray(promptData.compatibleApps) ? promptData.compatibleApps : promptData.models || ['ChatGPT'],
+    compatibleModels: Array.isArray(promptData.compatibleModels) ? promptData.compatibleModels : [],
+    modelVersions: Array.isArray(promptData.modelVersions) ? promptData.modelVersions : (Array.isArray(promptData.compatibleModels) ? promptData.compatibleModels : []),
+    tags: Array.isArray(promptData.tags) ? promptData.tags.slice(0, 20).map((t) => String(t).slice(0, 30)) : [],
+    status: 'draft',
+    isPublic: false,
+    isPersonal: true,
+    isUserCreated: true,
+    author: (promptData.author || 'You').slice(0, 100),
+    authorId: uid,
+    createdAt: promptData.createdAt || new Date().toISOString().split('T')[0],
+  });
+
+  try {
+    const writePromise = (async () => {
+      const docRef = doc(db, 'users', uid, 'myPrompts', fallbackId);
+      await setDoc(docRef, cleanData, { merge: true });
+      return fallbackId;
+    })();
+
+    const timeoutPromise = new Promise<string>((resolve) => {
+      setTimeout(() => {
+        console.warn(`Firestore addUserPrompt timed out after ${timeoutMs}ms for ID: ${fallbackId}`);
+        resolve(fallbackId);
+      }, timeoutMs);
+    });
+
+    return await Promise.race([writePromise, timeoutPromise]);
+  } catch (error) {
+    console.error('Error adding user prompt to Firestore:', error);
+    return fallbackId;
+  }
+};
+
+export const getUserPromptsFromFirestore = async (
+  uid: string,
+  timeoutMs: number = 5000
+): Promise<PromptItem[]> => {
+  if (!isConfigured || !db || !uid) return [];
+  try {
+    const fetchPromise = (async () => {
+      const myPromptsCol = collection(db, 'users', uid, 'myPrompts');
+      const snapshot = await getDocs(myPromptsCol);
+      const list: PromptItem[] = [];
+      snapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        list.push({
+          id: docSnap.id,
+          ...data,
+          isUserCreated: true,
+          isPersonal: true,
+          isPublic: false,
+        } as unknown as PromptItem);
+      });
+      return list;
+    })();
+
+    const timeoutPromise = new Promise<PromptItem[]>((resolve) => {
+      setTimeout(() => {
+        console.warn(`Firestore getUserPrompts timed out after ${timeoutMs}ms for uid: ${uid}`);
+        resolve([]);
+      }, timeoutMs);
+    });
+
+    return await Promise.race([fetchPromise, timeoutPromise]);
+  } catch (error) {
+    console.error('Error fetching user prompts from Firestore:', error);
+    return [];
+  }
+};
+
+export const updateUserPromptInFirestore = async (
+  uid: string,
+  promptId: string,
+  updates: Partial<PromptItem>,
+  timeoutMs: number = 4000
+): Promise<void> => {
+  if (!isConfigured || !db || !uid) return;
+  const cleanUpdates = removeUndefinedProps({
+    ...updates,
+    isPublic: false,
+  });
+  try {
+    const writePromise = (async () => {
+      const promptRef = doc(db, 'users', uid, 'myPrompts', promptId);
+      await setDoc(promptRef, cleanUpdates, { merge: true });
+    })();
+
+    const timeoutPromise = new Promise<void>((resolve) => {
+      setTimeout(() => {
+        console.warn(`Firestore updateUserPrompt timed out after ${timeoutMs}ms for ID: ${promptId}`);
+        resolve();
+      }, timeoutMs);
+    });
+
+    await Promise.race([writePromise, timeoutPromise]);
+  } catch (error) {
+    console.error('Error updating user prompt in Firestore:', error);
+  }
+};
+
+export const deleteUserPromptFromFirestore = async (uid: string, promptId: string): Promise<void> => {
+  if (!isConfigured || !db || !uid) return;
+  try {
+    const promptRef = doc(db, 'users', uid, 'myPrompts', promptId);
+    await deleteDoc(promptRef);
+  } catch (error) {
+    console.error('Error deleting user prompt from Firestore:', error);
+  }
+};

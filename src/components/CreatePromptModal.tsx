@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
 import { CategoryType, DifficultyType } from '../types';
-import { X, Sparkles, Plus, Info, Database, Cpu, Check, X as XIcon } from 'lucide-react';
+import { X, Sparkles, Plus, Info, Database, Cpu, Check, X as XIcon, Lock, BookmarkPlus, Shield } from 'lucide-react';
 import { sanitizeTags } from '../utils/storage';
 
 const POPULAR_CATEGORIES = [
@@ -43,6 +43,7 @@ const POPULAR_MODELS = [
 
 export const CreatePromptModal: React.FC = () => {
   const { isCreateModalOpen, setIsCreateModalOpen, createPrompt, currentUser, addToast } = useApp();
+  const isAdmin = currentUser?.role === 'admin';
 
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -148,10 +149,17 @@ export const CreatePromptModal: React.FC = () => {
         compatibleModels: finalModels,
         modelVersions: finalModels,
         difficulty,
-        author: currentUser?.displayName || 'Custom Creator',
+        author: currentUser?.displayName || (isAdmin ? 'Admin' : 'You (Custom)'),
+        authorId: currentUser?.uid,
+        isPublic: isAdmin,
+        status: isAdmin ? 'published' : 'draft',
       });
 
-      addToast('Prompt Published Successfully!', 'success', cleanTitle);
+      addToast(
+        isAdmin ? 'Prompt Published to Global Library!' : 'Saved to My Prompts (Private)!',
+        'success',
+        cleanTitle
+      );
 
       // Reset form
       setTitle('');
@@ -181,18 +189,30 @@ export const CreatePromptModal: React.FC = () => {
         {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-slate-800 bg-slate-950/40">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-xl bg-cyan-500/20 text-cyan-400 border border-cyan-500/30">
-              <Sparkles className="w-5 h-5" />
+            <div className={`p-2 rounded-xl border ${
+              isAdmin
+                ? 'bg-purple-500/20 text-purple-400 border-purple-500/30'
+                : 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+            }`}>
+              {isAdmin ? <Shield className="w-5 h-5" /> : <Lock className="w-5 h-5" />}
             </div>
             <div>
               <h2 className="text-lg font-bold text-white flex items-center gap-2">
-                <span>Create & Publish Prompt</span>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 flex items-center gap-1">
+                <span>{isAdmin ? 'Create & Publish Prompt' : 'Create Personal Prompt'}</span>
+                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border flex items-center gap-1 ${
+                  isAdmin
+                    ? 'bg-purple-500/20 text-purple-300 border-purple-500/30'
+                    : 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30'
+                }`}>
                   <Database className="w-3 h-3" />
-                  <span>Firestore Sync</span>
+                  <span>{isAdmin ? 'Global Library' : 'Personal Vault Only'}</span>
                 </span>
               </h2>
-              <p className="text-xs text-slate-400">Add a tested daily prompt directly to the library.</p>
+              <p className="text-xs text-slate-400">
+                {isAdmin
+                  ? 'Add a production-tested prompt to the Global Public Library.'
+                  : 'Save a prompt strictly to your personal vault (My Prompts).'}
+              </p>
             </div>
           </div>
 
@@ -206,6 +226,20 @@ export const CreatePromptModal: React.FC = () => {
 
         {/* Form Body */}
         <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-4 flex-1">
+          {/* RBAC Isolation Banner for Regular Users */}
+          {!isAdmin && (
+            <div className="p-3.5 rounded-xl bg-cyan-950/30 border border-cyan-500/30 flex items-start gap-3">
+              <Lock className="w-4 h-4 text-cyan-400 mt-0.5 shrink-0" />
+              <div className="space-y-0.5">
+                <div className="text-xs font-semibold text-cyan-200">
+                  Personal Workspace Isolation
+                </div>
+                <div className="text-[11px] text-slate-400 leading-relaxed">
+                  This prompt is strictly saved to your private vault (<span className="font-mono text-[10px] text-cyan-300">users/{currentUser?.uid || 'uid'}/myPrompts</span>). Regular users cannot publish to the Global Public Library.
+                </div>
+              </div>
+            </div>
+          )}
           {/* Title */}
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-semibold text-slate-300">Prompt Title *</label>
@@ -453,14 +487,27 @@ export const CreatePromptModal: React.FC = () => {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-lg shadow-cyan-500/20 transition-all"
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold shadow-lg transition-all ${
+                isAdmin
+                  ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/30'
+                  : 'bg-cyan-500 hover:bg-cyan-400 text-slate-950 shadow-cyan-500/20'
+              }`}
             >
               {isSubmitting ? (
-                <div className="w-4 h-4 border-2 border-slate-950/30 border-t-slate-950 rounded-full animate-spin" />
+                <div className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin" />
               ) : (
                 <>
-                  <Plus className="w-4 h-4 stroke-[3]" />
-                  <span>Publish to Library</span>
+                  {isAdmin ? (
+                    <>
+                      <Plus className="w-4 h-4 stroke-[3]" />
+                      <span>Publish to Global Library</span>
+                    </>
+                  ) : (
+                    <>
+                      <BookmarkPlus className="w-4 h-4 stroke-[2.5]" />
+                      <span>Save to My Prompts (Private)</span>
+                    </>
+                  )}
                 </>
               )}
             </button>

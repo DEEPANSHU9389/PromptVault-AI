@@ -47,6 +47,10 @@ import {
   bulkImportPromptsToFirestore,
   deleteUserAccount,
   sendUserEmailVerification,
+  addUserPromptToFirestore,
+  getUserPromptsFromFirestore,
+  updateUserPromptInFirestore,
+  deleteUserPromptFromFirestore,
 } from '../firebase';
 
 interface AppContextType {
@@ -333,6 +337,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           })
           .catch((err) => {
             console.warn('Error fetching user library from Firestore:', err);
+          });
+
+        // Fetch user's private prompts from users/{uid}/myPrompts
+        getUserPromptsFromFirestore(uid)
+          .then((fsUserPrompts) => {
+            if (fsUserPrompts && fsUserPrompts.length > 0) {
+              setUserPrompts((prev) => {
+                const mergedMap = new Map<string, PromptItem>();
+                prev.forEach((p) => mergedMap.set(p.id, p));
+                fsUserPrompts.forEach((p) => mergedMap.set(p.id, p));
+                const merged = Array.from(mergedMap.values());
+                saveStoredUserPrompts(merged);
+                return merged;
+              });
+            }
+          })
+          .catch((err) => {
+            console.warn('Error fetching personal prompts from Firestore:', err);
           });
       });
 
@@ -630,6 +652,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
     const cleanedTags = sanitizeTags(data.tags || []);
     const safeTags = cleanedTags.length > 0 ? cleanedTags : [data.category || 'Marketing', 'AI'];
+    const isAdmin = currentUser?.role === 'admin';
 
     const newPrompt: PromptItem = {
       ...data,
@@ -644,16 +667,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       compatibleModels: data.compatibleModels || data.modelVersions || [],
       modelVersions: data.modelVersions || data.compatibleModels || [],
       tags: safeTags,
-      status: data.status || 'published',
-      isPublic: data.isPublic !== undefined ? data.isPublic : data.status === 'published',
-      isFeatured: Boolean(data.isFeatured),
-      scheduledAt: data.scheduledAt || undefined,
+      // Regular users are strictly restricted from publishing globally
+      status: isAdmin ? (data.status || 'published') : 'draft',
+      isPublic: isAdmin ? (data.isPublic !== undefined ? data.isPublic : data.status === 'published') : false,
+      isFeatured: isAdmin ? Boolean(data.isFeatured) : false,
+      scheduledAt: isAdmin ? data.scheduledAt || undefined : undefined,
       imageUrl: data.imageUrl || undefined,
       createdAt: new Date().toISOString().split('T')[0],
       usageCount: 1,
       rating: 5.0,
       ratingCount: 1,
       isUserCreated: true,
+      isPersonal: !isAdmin,
       author: data.author || currentUser?.displayName || 'You (Custom)',
       authorId: data.authorId || currentUser?.uid || 'user-local',
       authorEmail: data.authorEmail || currentUser?.email || undefined,
@@ -664,23 +689,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setUserPrompts(updatedUserPrompts);
     saveStoredUserPrompts(updatedUserPrompts);
 
-    // If it's public/published, also make sure it shows up in firestorePrompts state
-    if (newPrompt.isPublic || newPrompt.status === 'published') {
+    // If admin published publicly, also make sure it shows up in firestorePrompts state
+    if (isAdmin && (newPrompt.isPublic || newPrompt.status === 'published')) {
       setFirestorePrompts((prev) => [newPrompt, ...prev.filter((p) => p.id !== newId)]);
     }
 
-    // 2. Persist to Firestore with timeout guard (never blocks the UI)
+    // 2. Persist to Firestore with timeout guard (strictly RBAC enforced)
     if (isFirebaseConfigured) {
       try {
-        await addPromptToFirestore(newPrompt, 4000);
-        // Refresh firestore prompts list in background
-        getPromptsFromFirestore(4000)
-          .then((updatedFS) => {
-            if (updatedFS && updatedFS.length > 0) {
-              setFirestorePrompts(updatedFS);
-            }
-          })
-          .catch((e) => console.warn('Background Firestore prompts sync warning:', e));
+        if (isAdmin) {
+          // Admin publishes to the root 'prompts' collection (Global Public Library)
+          await addPromptToFirestore(newPrompt, 4000);
+          getPromptsFromFirestore(4000)
+            .then((updatedFS) => {
+              if (updatedFS && updatedFS.length > 0) {
+                setFirestorePrompts(updatedFS);
+              }
+            })
+            .catch((e) => console.warn('Background Firestore prompts sync warning:', e));
+        } else if (currentUser?.uid) {
+          // Regular user strictly saves to their personal private subcollection: users/{uid}/myPrompts
+          await addUserPromptToFirestore(currentUser.uid, newPrompt, 4000);
+        }
       } catch (e) {
         console.error('Failed to save prompt to Firestore, fallback to LocalStorage:', e);
       }
@@ -701,6 +731,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (updates.prompt) cleanedUpdates.prompt = updates.prompt.trim();
     if (updates.category) cleanedUpdates.category = updates.category.trim();
 
+    // Regular users cannot make prompts public
+    if (currentUser?.role !== 'admin') {
+      cleanedUpdates.isPublic = false;
+    }
+
     // 1. Immediately reflect in memory and localStorage
     setUserPrompts((prev) => {
       const next = prev.map((p) => (p.id === id ? { ...p, ...cleanedUpdates } : p));
@@ -719,7 +754,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // 2. Sync to Firestore in background with timeout guard
     if (isFirebaseConfigured) {
       try {
-        await updatePromptInFirestore(id, cleanedUpdates, 4000);
+        if (currentUser?.role === 'admin') {
+          const isGlobal = firestorePrompts.some((p) => p.id === id);
+          if (isGlobal) {
+            await updatePromptInFirestore(id, cleanedUpdates, 4000);
+          } else if (currentUser?.uid) {
+            await updateUserPromptInFirestore(currentUser.uid, id, cleanedUpdates, 4000);
+          }
+        } else if (currentUser?.uid) {
+          await updateUserPromptInFirestore(currentUser.uid, id, cleanedUpdates, 4000);
+        }
       } catch (e) {
         console.error('Failed to update prompt in Firestore:', e);
       }
@@ -741,7 +785,16 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // 2. Delete from Firestore if configured
     if (isFirebaseConfigured) {
       try {
-        await deletePromptFromFirestore(id);
+        if (currentUser?.role === 'admin') {
+          const isGlobal = firestorePrompts.some((p) => p.id === id);
+          if (isGlobal) {
+            await deletePromptFromFirestore(id);
+          } else if (currentUser?.uid) {
+            await deleteUserPromptFromFirestore(currentUser.uid, id);
+          }
+        } else if (currentUser?.uid) {
+          await deleteUserPromptFromFirestore(currentUser.uid, id);
+        }
       } catch (err) {
         console.error('Error deleting prompt from Firestore:', err);
       }

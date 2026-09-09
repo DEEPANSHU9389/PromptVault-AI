@@ -5,7 +5,7 @@ import { PromptGrid } from '../PromptGrid';
 import { Bookmark, Star, User, Library, Sparkles, Plus } from 'lucide-react';
 
 export const LibraryView: React.FC = () => {
-  const { viewMode, filteredPrompts, resetFilters, setIsCreateModalOpen } = useApp();
+  const { viewMode, filteredPrompts, resetFilters, setIsCreateModalOpen, currentUser, setViewMode } = useApp();
 
   let pageTitle = 'Prompt Library';
   let pageSubtitle = 'Discover high-quality prompts for every AI workflow.';
@@ -21,9 +21,11 @@ export const LibraryView: React.FC = () => {
     Icon = Star;
   } else if (viewMode === 'my-prompts') {
     pageTitle = 'My Custom Prompts';
-    pageSubtitle = 'Custom prompts you have authored and saved locally.';
+    pageSubtitle = 'Custom prompts you have authored and saved to your personal vault.';
     Icon = User;
   }
+
+  const isAdmin = currentUser?.role === 'admin';
 
   return (
     <div className="space-y-6 animate-fade-in pb-12">
@@ -40,11 +42,21 @@ export const LibraryView: React.FC = () => {
         </div>
 
         <button
-          onClick={() => setIsCreateModalOpen(true)}
-          className="flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20 transition-all self-start md:self-auto"
+          onClick={() => {
+            if (isAdmin) {
+              setViewMode('admin');
+            } else {
+              setIsCreateModalOpen(true);
+            }
+          }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold shadow-lg transition-all self-start md:self-auto ${
+            isAdmin
+              ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-600/20'
+              : 'bg-indigo-600 hover:bg-indigo-500 text-white shadow-indigo-600/20'
+          }`}
         >
           <Plus className="w-4 h-4" />
-          <span>Create Prompt</span>
+          <span>{isAdmin ? 'Publish Studio' : 'Create Prompt'}</span>
         </button>
       </div>
 

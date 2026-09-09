@@ -22,17 +22,16 @@ service cloud.firestore {
       allow read: if isAuthenticated();
       allow write: if isOwner(userId) || isAdmin();
 
-      // Personal user prompts sub-collection (accessible by owner or admin)
+      // Personal user prompts sub-collection (strictly owner)
       match /myPrompts/{promptId} {
-        allow read, write: if isOwner(userId) || isAdmin();
+        allow read, write: if request.auth != null && request.auth.uid == userId;
       }
     }
 
-    // Prompts collection
+    // Prompts collection (Global Public Library - strictly Admin Only)
     match /prompts/{promptId} {
       allow read: if true;
-      allow create: if isAuthenticated() && request.resource.data.authorId == request.auth.uid;
-      allow update, delete: if isAuthenticated() && (resource.data.authorId == request.auth.uid || isAdmin());
+      allow create, update, delete: if request.auth != null && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
     }
 
     // User Libraries collection

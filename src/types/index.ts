@@ -36,6 +36,7 @@ export interface PromptItem {
   ratingCount: number;
   usageCount: number;
   isUserCreated?: boolean;
+  isPersonal?: boolean;
   isPublic?: boolean;
   isFeatured?: boolean;
   authorId?: string;
