@@ -235,38 +235,35 @@ Return ONLY the final optimized prompt text without any intro or outro.`;
     try {
       const isUserAdmin = currentUser.role === 'admin';
 
-      // For normal users: strictly save to their personal private sub-collection:
-      // Firebase Path: collection(db, 'users', currentUser.uid, 'myPrompts')
+      // For normal users: strictly save to their personal private workspace: users/{uid}/myPrompts
       if (!isUserAdmin || adminSaveTarget === 'personal') {
-        const personalPromptsRef = collection(db, 'users', currentUser.uid, 'myPrompts');
-        await addDoc(personalPromptsRef, {
+        await createPrompt({
           title: `${role.trim() || 'Custom'} AI Prompt`,
           description: `AI-engineered prompt generated from: ${taskContext.slice(0, 90)}...`,
           prompt: assembledPrompt.trim(),
-          role: role.trim(),
-          taskContext: taskContext.trim(),
-          constraints: constraints.trim(),
-          category: category, // Uses dynamic category variable
+          category: category,
           tags: ['AI-Generated', 'Personal', category],
           models: ['ChatGPT', 'Claude', 'Gemini'],
-          createdAt: serverTimestamp(),
-          authorId: currentUser.uid,
-          authorName: currentUser.displayName || currentUser.email || 'You',
+          difficulty: 'Intermediate',
           isPersonal: true,
+          author: currentUser.displayName || currentUser.email || 'You',
         });
 
-        addToast('Saved prompt to your private library (myPrompts)!', 'success');
+        addToast('Saved prompt to your private workspace (myPrompts)!', 'success');
       } else {
         // Admin user choosing to publish globally using the dynamic category
         await createPrompt({
           title: `${role.trim() || 'Custom'} AI Prompt`,
           description: `Custom assembled prompt for ${role.toLowerCase()} workflows.`,
           prompt: assembledPrompt.trim(),
-          category: category, // Uses dynamic category variable instead of hardcoding 'Coding'
+          category: category,
           tags: ['AI-Generated', 'Admin', category],
           models: ['ChatGPT', 'Claude', 'Gemini'],
           difficulty: 'Intermediate',
-          author: currentUser?.displayName || 'Prompt Builder User',
+          isPersonal: false,
+          isPublic: true,
+          status: 'published',
+          author: currentUser?.displayName || 'Admin',
         });
         addToast(`Published prompt to global public library under '${category}'!`, 'success');
       }

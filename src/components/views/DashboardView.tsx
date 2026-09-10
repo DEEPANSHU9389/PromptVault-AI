@@ -23,18 +23,21 @@ import {
 export const DashboardView: React.FC = () => {
   const {
     stats,
-    allPrompts,
+    globalPrompts,
     setViewMode,
     setIsCreateModalOpen,
   } = useApp();
 
+  // Strictly global library prompts (excluding drafts & scheduled)
+  const libraryPrompts = globalPrompts.filter((p) => p.status !== 'draft' && p.status !== 'scheduled');
+
   // Trending Prompts (sorted by usage count)
-  const trendingPrompts = [...allPrompts]
+  const trendingPrompts = [...libraryPrompts]
     .sort((a, b) => (b.usageCount || 0) - (a.usageCount || 0))
     .slice(0, 3);
 
   // Recently Used / Highest Rated
-  const recentlyUsedPrompts = [...allPrompts]
+  const recentlyUsedPrompts = [...libraryPrompts]
     .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
     .slice(0, 3);
 
@@ -42,27 +45,27 @@ export const DashboardView: React.FC = () => {
   const popularCategories: { category: CategoryType; count: number }[] = [
     {
       category: 'Marketing',
-      count: allPrompts.filter((p) => p.category === 'Marketing').length,
+      count: libraryPrompts.filter((p) => p.category === 'Marketing').length,
     },
     {
       category: 'Coding',
-      count: allPrompts.filter((p) => p.category === 'Coding').length,
+      count: libraryPrompts.filter((p) => p.category === 'Coding').length,
     },
     {
       category: 'Image Generation',
-      count: allPrompts.filter((p) => p.category === 'Image Generation').length,
+      count: libraryPrompts.filter((p) => p.category === 'Image Generation').length,
     },
     {
       category: 'SEO',
-      count: allPrompts.filter((p) => p.category === 'SEO').length,
+      count: libraryPrompts.filter((p) => p.category === 'SEO').length,
     },
     {
       category: 'Productivity',
-      count: allPrompts.filter((p) => p.category === 'Productivity').length,
+      count: libraryPrompts.filter((p) => p.category === 'Productivity').length,
     },
     {
       category: 'AI Automation',
-      count: allPrompts.filter((p) => p.category === 'AI Automation').length,
+      count: libraryPrompts.filter((p) => p.category === 'AI Automation').length,
     },
   ];
 
@@ -205,7 +208,7 @@ export const DashboardView: React.FC = () => {
         <div className="flex items-center justify-between mb-4">
           <div className="flex items-center gap-2">
             <Flame className="w-4 h-4 text-amber-400" />
-            <h2 className="text-base font-bold text-white">Global Library Prompts ({allPrompts.length})</h2>
+            <h2 className="text-base font-bold text-white">Global Library Prompts ({libraryPrompts.length})</h2>
           </div>
           <button
             onClick={() => setViewMode('library')}
@@ -216,7 +219,7 @@ export const DashboardView: React.FC = () => {
           </button>
         </div>
 
-        {allPrompts.length === 0 ? (
+        {libraryPrompts.length === 0 ? (
           <div className="p-8 border border-dashed border-slate-800 rounded-2xl bg-slate-900/40 text-center space-y-4">
             <div className="w-12 h-12 mx-auto rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
               <FileText className="w-6 h-6" />

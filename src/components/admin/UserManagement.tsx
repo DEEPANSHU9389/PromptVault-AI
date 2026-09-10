@@ -18,21 +18,33 @@ import { getAllUsersFromFirestore, updateUserRoleInFirestore } from '../../fireb
 import { useApp } from '../../context/AppContext';
 
 export const UserManagement: React.FC = () => {
-  const { addToast } = useApp();
+  const { addToast, currentUser } = useApp();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'admin' | 'user'>('all');
   const [updatingUid, setUpdatingUid] = useState<string | null>(null);
 
   const fetchUsers = async () => {
     setIsLoading(true);
+    setFetchError(null);
     try {
       const data = await getAllUsersFromFirestore();
-      setUsers(data);
+      const userMap = new Map<string, UserProfile>();
+      if (currentUser) {
+        userMap.set(currentUser.uid, currentUser);
+      }
+      data.forEach((u) => userMap.set(u.uid, u));
+      setUsers(Array.from(userMap.values()));
     } catch (err: any) {
-      console.error(err);
-      addToast('Failed to fetch user list', 'error', err.message);
+      console.error("Failed fetching users directory:", err);
+      const errMsg = err?.message || 'Failed fetching users directory from Firestore. Check permissions.';
+      setFetchError(errMsg);
+      if (currentUser) {
+        setUsers([currentUser]);
+      }
+      addToast('Failed to fetch user list', 'error', errMsg);
     } finally {
       setIsLoading(false);
     }
@@ -103,6 +115,32 @@ export const UserManagement: React.FC = () => {
           <span>Refresh Directory</span>
         </button>
       </div>
+
+      {/* Directory Fetch Warning Alert */}
+      {fetchError && (
+        <div className="p-4 sm:p-5 bg-red-950/40 border border-red-500/40 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-left shadow-lg animate-in fade-in duration-200">
+          <div className="flex items-start space-x-3">
+            <div className="p-2.5 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl shrink-0 mt-0.5">
+              <ShieldAlert className="w-5 h-5" />
+            </div>
+            <div className="space-y-1">
+              <h4 className="text-sm font-bold text-white">Failed to Load User Directory</h4>
+              <p className="text-xs text-red-300/90 leading-relaxed font-mono">{fetchError}</p>
+              <p className="text-[11px] text-slate-400">
+                Ensure you are authenticated with an Administrator account and Firestore security rules allow reading from /users.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={fetchUsers}
+            disabled={isLoading}
+            className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-bold rounded-xl transition-colors shrink-0 flex items-center space-x-2 self-start sm:self-auto shadow-md"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin' : ''}`} />
+            <span>Retry Connection</span>
+          </button>
+        </div>
+      )}
 
       {/* Search & Filters */}
       <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">

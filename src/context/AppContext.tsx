@@ -83,6 +83,8 @@ interface AppContextType {
   
   // Prompts & Collections State
   allPrompts: PromptItem[];
+  globalPrompts: PromptItem[];
+  myPrompts: PromptItem[];
   savedIds: string[];
   favoriteIds: string[];
   userPrompts: PromptItem[];
@@ -152,7 +154,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [firestorePrompts, setFirestorePrompts] = useState<PromptItem[]>([]);
   const [savedIds, setSavedIds] = useState<string[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
-  const [userPrompts, setUserPrompts] = useState<PromptItem[]>([]);
+  const [myPrompts, setMyPrompts] = useState<PromptItem[]>([]);
   const [deletedIds, setDeletedIds] = useState<string[]>([]);
   
   const [filters, setFilters] = useState<FilterState>(defaultFilterState);
@@ -192,7 +194,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     
     setSavedIds(getStoredSavedIds());
     setFavoriteIds(getStoredFavoriteIds());
-    setUserPrompts(getStoredUserPrompts());
+    setMyPrompts(getStoredUserPrompts());
     setDeletedIds(getStoredDeletedIds());
 
     // Listen to Firebase Auth state
@@ -203,6 +205,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
           isSyncingProfileRef.current = false;
           setCurrentUser(null);
           setIsAuthLoading(false);
+          setMyPrompts([]);
+          setSavedIds([]);
+          setFavoriteIds([]);
           return;
         }
 
@@ -343,7 +348,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         getUserPromptsFromFirestore(uid)
           .then((fsUserPrompts) => {
             if (fsUserPrompts && fsUserPrompts.length > 0) {
-              setUserPrompts((prev) => {
+              setMyPrompts((prev) => {
                 const mergedMap = new Map<string, PromptItem>();
                 prev.forEach((p) => mergedMap.set(p.id, p));
                 fsUserPrompts.forEach((p) => mergedMap.set(p.id, p));
@@ -579,9 +584,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
   };
 
-  // Combined List of All Prompts (Firestore prompts + local user prompts + initial empty)
-  const allPrompts = useMemo(() => {
-    // Deduplicate by ID and exclude deleted items
+  // Global Library Prompts (Strictly root prompts collection from Firestore, excluding deleted items)
+  const globalPrompts = useMemo(() => {
     const map = new Map<string, PromptItem>();
     INITIAL_PROMPTS.forEach((p) => {
       if (!deletedIds.includes(p.id)) map.set(p.id, p);
@@ -589,11 +593,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     firestorePrompts.forEach((p) => {
       if (!deletedIds.includes(p.id)) map.set(p.id, p);
     });
-    userPrompts.forEach((p) => {
-      if (!deletedIds.includes(p.id)) map.set(p.id, p);
-    });
     return Array.from(map.values());
-  }, [firestorePrompts, userPrompts, deletedIds]);
+  }, [firestorePrompts, deletedIds]);
+
+  // All Prompts (strictly global library prompts to prevent user private prompt state leak)
+  const allPrompts = useMemo(() => {
+    return globalPrompts;
+  }, [globalPrompts]);
 
   // Handle Save
   const toggleSavePrompt = (id: string) => {
@@ -606,7 +612,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         saveUserLibraryToFirestore(currentUser.uid, next, favoriteIds);
       }
 
-      const prompt = allPrompts.find((p) => p.id === id);
+      const prompt = [...globalPrompts, ...myPrompts].find((p) => p.id === id);
       if (prompt) {
         addToast(
           exists ? 'Removed from Saved' : 'Saved to Library!',
@@ -629,7 +635,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         saveUserLibraryToFirestore(currentUser.uid, savedIds, next);
       }
 
-      const prompt = allPrompts.find((p) => p.id === id);
+      const prompt = [...globalPrompts, ...myPrompts].find((p) => p.id === id);
       if (prompt) {
         addToast(
           exists ? 'Removed from Favorites' : 'Added to Favorites!',
@@ -641,7 +647,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
-  // Create Prompt (Immediately populates library)
+  // Create Prompt (Strict RBAC: Regular users save strictly to private workspace; Admins publish to global library)
   const createPrompt = async (
     data: Omit<PromptItem, 'id' | 'createdAt' | 'usageCount' | 'rating' | 'ratingCount' | 'isUserCreated'>
   ): Promise<void> => {
@@ -653,6 +659,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     const cleanedTags = sanitizeTags(data.tags || []);
     const safeTags = cleanedTags.length > 0 ? cleanedTags : [data.category || 'Marketing', 'AI'];
     const isAdmin = currentUser?.role === 'admin';
+    const isPersonal = !isAdmin || Boolean(data.isPersonal);
 
     const newPrompt: PromptItem = {
       ...data,
@@ -667,38 +674,28 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       compatibleModels: data.compatibleModels || data.modelVersions || [],
       modelVersions: data.modelVersions || data.compatibleModels || [],
       tags: safeTags,
-      // Regular users are strictly restricted from publishing globally
-      status: isAdmin ? (data.status || 'published') : 'draft',
-      isPublic: isAdmin ? (data.isPublic !== undefined ? data.isPublic : data.status === 'published') : false,
-      isFeatured: isAdmin ? Boolean(data.isFeatured) : false,
-      scheduledAt: isAdmin ? data.scheduledAt || undefined : undefined,
+      status: (!isPersonal && isAdmin) ? (data.status || 'published') : 'draft',
+      isPublic: (!isPersonal && isAdmin) ? (data.isPublic !== undefined ? data.isPublic : data.status === 'published') : false,
+      isFeatured: (!isPersonal && isAdmin) ? Boolean(data.isFeatured) : false,
+      scheduledAt: (!isPersonal && isAdmin) ? data.scheduledAt || undefined : undefined,
       imageUrl: data.imageUrl || undefined,
       createdAt: new Date().toISOString().split('T')[0],
       usageCount: 1,
       rating: 5.0,
       ratingCount: 1,
       isUserCreated: true,
-      isPersonal: !isAdmin,
+      isPersonal: isPersonal,
       author: data.author || currentUser?.displayName || 'You (Custom)',
       authorId: data.authorId || currentUser?.uid || 'user-local',
       authorEmail: data.authorEmail || currentUser?.email || undefined,
     };
 
-    // 1. Synchronously update local user prompts and storage immediately
-    const updatedUserPrompts = [newPrompt, ...userPrompts.filter((p) => p.id !== newId)];
-    setUserPrompts(updatedUserPrompts);
-    saveStoredUserPrompts(updatedUserPrompts);
-
-    // If admin published publicly, also make sure it shows up in firestorePrompts state
-    if (isAdmin && (newPrompt.isPublic || newPrompt.status === 'published')) {
+    if (!isPersonal && isAdmin) {
+      // 1. Admin Publishing to Root 'prompts' collection (Global Public Library)
       setFirestorePrompts((prev) => [newPrompt, ...prev.filter((p) => p.id !== newId)]);
-    }
 
-    // 2. Persist to Firestore with timeout guard (strictly RBAC enforced)
-    if (isFirebaseConfigured) {
-      try {
-        if (isAdmin) {
-          // Admin publishes to the root 'prompts' collection (Global Public Library)
+      if (isFirebaseConfigured) {
+        try {
           await addPromptToFirestore(newPrompt, 4000);
           getPromptsFromFirestore(4000)
             .then((updatedFS) => {
@@ -707,12 +704,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
               }
             })
             .catch((e) => console.warn('Background Firestore prompts sync warning:', e));
-        } else if (currentUser?.uid) {
-          // Regular user strictly saves to their personal private subcollection: users/{uid}/myPrompts
-          await addUserPromptToFirestore(currentUser.uid, newPrompt, 4000);
+        } catch (e) {
+          console.error('Failed to save global prompt to Firestore:', e);
         }
-      } catch (e) {
-        console.error('Failed to save prompt to Firestore, fallback to LocalStorage:', e);
+      }
+    } else {
+      // 2. Regular User (or Admin personal prompt):
+      // Save strictly to private sub-collection: users/${currentUser.uid}/myPrompts
+      // Update ONLY the myPrompts state array in memory
+      // DO NOT push, append, or merge the user's private prompt into the global prompts state array
+      const updatedMyPrompts = [newPrompt, ...myPrompts.filter((p) => p.id !== newId)];
+      setMyPrompts(updatedMyPrompts);
+      saveStoredUserPrompts(updatedMyPrompts);
+
+      if (isFirebaseConfigured && currentUser?.uid) {
+        try {
+          await addUserPromptToFirestore(currentUser.uid, newPrompt, 4000);
+        } catch (e) {
+          console.error('Failed to save prompt to user personal subcollection:', e);
+        }
       }
     }
 
@@ -736,75 +746,65 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       cleanedUpdates.isPublic = false;
     }
 
-    // 1. Immediately reflect in memory and localStorage
-    setUserPrompts((prev) => {
-      const next = prev.map((p) => (p.id === id ? { ...p, ...cleanedUpdates } : p));
-      saveStoredUserPrompts(next);
-      return next;
-    });
+    // Update in myPrompts if present
+    const inMyPrompts = myPrompts.some((p) => p.id === id);
+    if (inMyPrompts) {
+      setMyPrompts((prev) => {
+        const next = prev.map((p) => (p.id === id ? { ...p, ...cleanedUpdates } : p));
+        saveStoredUserPrompts(next);
+        return next;
+      });
+      if (isFirebaseConfigured && currentUser?.uid) {
+        updateUserPromptInFirestore(currentUser.uid, id, cleanedUpdates, 4000).catch((e) =>
+          console.warn('Update personal prompt warning:', e)
+        );
+      }
+    }
 
-    setFirestorePrompts((prev) => {
-      return prev.map((p) => (p.id === id ? { ...p, ...cleanedUpdates } : p));
-    });
+    // Update in global prompts if present (Admin only)
+    const inGlobal = firestorePrompts.some((p) => p.id === id);
+    if (inGlobal && currentUser?.role === 'admin') {
+      setFirestorePrompts((prev) => prev.map((p) => (p.id === id ? { ...p, ...cleanedUpdates } : p)));
+      if (isFirebaseConfigured) {
+        updatePromptInFirestore(id, cleanedUpdates, 4000).catch((e) =>
+          console.warn('Update global prompt warning:', e)
+        );
+      }
+    }
 
     if (selectedPrompt?.id === id) {
       setSelectedPrompt({ ...selectedPrompt, ...cleanedUpdates });
-    }
-
-    // 2. Sync to Firestore in background with timeout guard
-    if (isFirebaseConfigured) {
-      try {
-        if (currentUser?.role === 'admin') {
-          const isGlobal = firestorePrompts.some((p) => p.id === id);
-          if (isGlobal) {
-            await updatePromptInFirestore(id, cleanedUpdates, 4000);
-          } else if (currentUser?.uid) {
-            await updateUserPromptInFirestore(currentUser.uid, id, cleanedUpdates, 4000);
-          }
-        } else if (currentUser?.uid) {
-          await updateUserPromptInFirestore(currentUser.uid, id, cleanedUpdates, 4000);
-        }
-      } catch (e) {
-        console.error('Failed to update prompt in Firestore:', e);
-      }
     }
   };
 
   // Delete User Prompt
   const deleteUserPrompt = async (id: string) => {
-    // 1. Mark as deleted locally so it immediately disappears from UI
-    setDeletedIds((prev) => {
-      if (!prev.includes(id)) {
-        const next = [...prev, id];
-        saveStoredDeletedIds(next);
-        return next;
-      }
-      return prev;
-    });
-
-    // 2. Delete from Firestore if configured
-    if (isFirebaseConfigured) {
-      try {
-        if (currentUser?.role === 'admin') {
-          const isGlobal = firestorePrompts.some((p) => p.id === id);
-          if (isGlobal) {
-            await deletePromptFromFirestore(id);
-          } else if (currentUser?.uid) {
-            await deleteUserPromptFromFirestore(currentUser.uid, id);
-          }
-        } else if (currentUser?.uid) {
-          await deleteUserPromptFromFirestore(currentUser.uid, id);
+    const inGlobal = firestorePrompts.some((p) => p.id === id);
+    if (inGlobal && currentUser?.role === 'admin') {
+      setDeletedIds((prev) => {
+        if (!prev.includes(id)) {
+          const next = [...prev, id];
+          saveStoredDeletedIds(next);
+          return next;
         }
-      } catch (err) {
-        console.error('Error deleting prompt from Firestore:', err);
-      }
+        return prev;
+      });
       setFirestorePrompts((prev) => prev.filter((p) => p.id !== id));
+      if (isFirebaseConfigured) {
+        deletePromptFromFirestore(id).catch((e) => console.warn('Delete global prompt warning:', e));
+      }
+    } else {
+      setMyPrompts((prev) => {
+        const next = prev.filter((p) => p.id !== id);
+        saveStoredUserPrompts(next);
+        return next;
+      });
+      if (isFirebaseConfigured && currentUser?.uid) {
+        deleteUserPromptFromFirestore(currentUser.uid, id).catch((e) =>
+          console.warn('Delete personal prompt warning:', e)
+        );
+      }
     }
-
-    // 3. Delete from local userPrompts
-    const updated = userPrompts.filter((p) => p.id !== id);
-    setUserPrompts(updated);
-    saveStoredUserPrompts(updated);
 
     if (selectedPrompt?.id === id) {
       setSelectedPrompt(null);
@@ -830,11 +830,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         ratingCount: 1,
         isUserCreated: true,
       }));
-      setUserPrompts((prev) => {
-        const next = [...newItems, ...prev];
-        saveStoredUserPrompts(next);
-        return next;
-      });
+      setFirestorePrompts((prev) => [...newItems, ...prev]);
       count = newItems.length;
     }
     return count;
@@ -886,24 +882,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   // Filter Logic
   const filteredPrompts = useMemo(() => {
-    return allPrompts.filter((item) => {
-      // 0. Draft & Scheduled Exclusion for Public Library & Dashboard
-      if ((viewMode === 'library' || viewMode === 'dashboard') && (item.status === 'draft' || item.status === 'scheduled')) {
-        return false;
-      }
+    let sourcePrompts: PromptItem[] = [];
 
-      // 1. View Mode Specific Filter
-      if (viewMode === 'saved' && !savedIds.includes(item.id)) {
-        return false;
-      }
-      if (viewMode === 'favorites' && !favoriteIds.includes(item.id)) {
-        return false;
-      }
-      if (viewMode === 'my-prompts' && !item.isUserCreated && item.authorId !== currentUser?.uid) {
-        return false;
-      }
+    if (viewMode === 'my-prompts') {
+      // Strictly personal prompts from private workspace
+      sourcePrompts = myPrompts;
+    } else if (viewMode === 'saved') {
+      const combined = [...globalPrompts, ...myPrompts];
+      sourcePrompts = combined.filter((p) => savedIds.includes(p.id));
+    } else if (viewMode === 'favorites') {
+      const combined = [...globalPrompts, ...myPrompts];
+      sourcePrompts = combined.filter((p) => favoriteIds.includes(p.id));
+    } else {
+      // 'library', 'collections', 'dashboard':
+      // Strictly global library prompts, excluding drafts and scheduled from public view
+      sourcePrompts = globalPrompts.filter((item) => item.status !== 'draft' && item.status !== 'scheduled');
+    }
 
-      // 2. Collection Filter
+    return sourcePrompts.filter((item) => {
+      // 1. Collection Filter
       if (filters.collectionFilter) {
         if (filters.collectionFilter === 'c-marketing' && item.category !== 'Marketing' && item.category !== 'Social Media') return false;
         if (filters.collectionFilter === 'c-coding' && item.category !== 'Coding' && item.category !== 'AI Automation') return false;
@@ -911,7 +908,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         if (filters.collectionFilter === 'c-productivity' && item.category !== 'Productivity' && item.category !== 'Business' && item.category !== 'Education') return false;
       }
 
-      // 3. Search Query
+      // 2. Search Query
       if (filters.searchQuery.trim()) {
         const query = filters.searchQuery.toLowerCase().trim();
         const matchTitle = item.title.toLowerCase().includes(query);
@@ -926,17 +923,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         }
       }
 
-      // 4. Category Filter
+      // 3. Category Filter
       if (filters.category !== 'All' && item.category !== filters.category) {
         return false;
       }
 
-      // 5. Model Filter
+      // 4. Model Filter
       if (filters.model !== 'All' && !item.models.includes(filters.model as AIModelType)) {
         return false;
       }
 
-      // 6. Difficulty Filter
+      // 5. Difficulty Filter
       if (filters.difficulty !== 'All' && item.difficulty !== filters.difficulty) {
         return false;
       }
@@ -949,17 +946,17 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       if (filters.sortBy === 'title') return a.title.localeCompare(b.title);
       return 0;
     });
-  }, [allPrompts, viewMode, savedIds, favoriteIds, filters, currentUser]);
+  }, [globalPrompts, myPrompts, viewMode, savedIds, favoriteIds, filters]);
 
   // Statistics
   const stats = useMemo(() => {
     return {
-      totalPrompts: allPrompts.length,
+      totalPrompts: globalPrompts.length, // strictly reflect globalPrompts.length (prompts authored/published by Admin to the root prompts collection)
       savedPromptsCount: savedIds.length,
       favoritesCount: favoriteIds.length,
-      myPromptsCount: allPrompts.filter((p) => p.isUserCreated || p.authorId === currentUser?.uid).length,
+      myPromptsCount: myPrompts.length, // "My Prompts" stat card should show myPrompts.length
     };
-  }, [allPrompts, savedIds, favoriteIds, currentUser]);
+  }, [globalPrompts.length, savedIds.length, favoriteIds.length, myPrompts.length]);
 
   return (
     <AppContext.Provider
@@ -980,10 +977,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         logout,
         deleteAccount,
         resendEmailVerification,
+        // Prompts & Collections State
         allPrompts,
+        globalPrompts,
+        myPrompts,
+        userPrompts: myPrompts,
         savedIds,
         favoriteIds,
-        userPrompts,
         filters,
         setFilters,
         resetFilters,

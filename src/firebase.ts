@@ -733,7 +733,10 @@ export const getUserProfileFromFirestore = async (uid: string, timeoutMs: number
 };
 
 export const getAllUsersFromFirestore = async (): Promise<UserProfile[]> => {
-  if (!isConfigured || !db) return [];
+  if (!isConfigured || !db) {
+    console.warn('[PromptVault] Firebase is not configured or Firestore db is unavailable.');
+    return [];
+  }
   try {
     const usersCol = collection(db, 'users');
     const snapshot = await getDocs(usersCol);
@@ -743,8 +746,8 @@ export const getAllUsersFromFirestore = async (): Promise<UserProfile[]> => {
     });
     return users;
   } catch (error) {
-    console.error('Error fetching users from Firestore:', error);
-    return [];
+    console.error("Failed fetching users directory:", error);
+    throw error;
   }
 };
 
